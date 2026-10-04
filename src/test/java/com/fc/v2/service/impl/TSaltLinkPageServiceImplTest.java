@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -32,8 +33,8 @@ import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /**
- * 挂接簿页服务层单测：校验拦截、欠挂重算、两处码子系统发、
- * 名录页属地圈定与三栏同算、摘牌旧页在册。
+ * 挂接簿页服务层单测：校验拦截、欠挂重算、两位小数口径、两处码子系统发/人手填拒收、
+ * 名录页属地圈定与三栏同算、摘牌旧页在册、起页署名钉死开单人。
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -66,43 +67,93 @@ public class TSaltLinkPageServiceImplTest {
         when(pageMapper.updateById(any())).thenReturn(1);
     }
 
-    // ---------- 欠挂折数：应挂64已挂41→23；25/9→16；48/48→0 ----------
+    // ---------- 欠挂折数（两位小数口径）：64-41=23；25-9=16；48-48=0 ----------
 
     @Test
     public void lackCount_isShouldMinusDone() {
-        assertLack(64, 41, 23);
-        assertLack(25, 9, 16);
-        assertLack(48, 48, 0);
+        assertLack("64", "41", "23.00");
+        assertLack("25", "9", "16.00");
+        assertLack("48", "48", "0.00");
     }
 
-    private void assertLack(int should, int done, int expectLack) {
+    // ---------- 五位照收折两位：列表/导出/库存同一口径 ----------
+
+    @Test
+    public void counts_roundToArchiveScale_twoDigits_halfUp() {
+        TSaltLinkPage saved = openPage("10.235", "3.004", 2);
+        assertEquals(new BigDecimal("10.24"), saved.getShouldCount());
+        assertEquals(new BigDecimal("3.00"), saved.getDoneCount());
+        assertEquals(new BigDecimal("7.24"), saved.getLackCount());
+        // 折完仍是两位，屏上与导出拿到的都是这两个值
+        assertEquals(2, saved.getShouldCount().scale());
+        assertEquals(2, saved.getLackCount().scale());
+    }
+
+    private void assertLack(String should, String done, String expectLack) {
         TSaltLinkPage saved = openPage(should, done, 2);
-        assertEquals(expectLack, saved.getLackCount(),
+        assertEquals(0, new BigDecimal(expectLack).compareTo(saved.getLackCount()),
                 "应挂" + should + "已挂" + done + "，欠挂应折出" + expectLack);
     }
 
-    // ---------- 两处码子归系统发，人手递上来不收 ----------
+    // ---------- 两处码子：系统发；人手递值当场拒收，不静默读没 ----------
 
     @Test
-    public void billNoAndSignCode_issuedBySystem_handValuesRejected() {
+    public void billNoAndSignCode_issuedBySystem_onCleanSubmit() {
         TSaltLinkPage r = new TSaltLinkPage();
         r.setSiteId(0);
         r.setNodeNo(2);
-        r.setShouldCount(10);
-        r.setDoneCount(3);
-        r.setBillNo("手写一个代号");
-        r.setSignCode("手写一个签认码");
-        r.setLackCount(999); // 人报的欠挂也不认
+        r.setShouldCount(new BigDecimal("10"));
+        r.setDoneCount(new BigDecimal("3"));
 
         TSaltLinkPage saved = service.openLinkPage(r);
 
-        assertNotEquals("手写一个代号", saved.getBillNo());
-        assertNotEquals("手写一个签认码", saved.getSignCode());
         assertTrue(saved.getBillNo().startsWith("GJ"));
         assertTrue(saved.getSignCode().startsWith("QR"));
-        assertEquals(7, saved.getLackCount());
+        assertEquals(0, new BigDecimal("7").compareTo(saved.getLackCount()));
         assertEquals(0, saved.getStatus());
         assertEquals("盐岭省—盐泽市—临卤县", saved.getScopeRoad());
+    }
+
+    @Test
+    public void handedBillNo_isRejected_notSilentlyOverwritten() {
+        TSaltLinkPage r = new TSaltLinkPage();
+        r.setSiteId(0);
+        r.setNodeNo(2);
+        r.setShouldCount(new BigDecimal("10"));
+        r.setDoneCount(new BigDecimal("3"));
+        r.setBillNo("手写一个代号");
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service.openLinkPage(r));
+        assertTrue(e.getMessage().contains("挂接代号"), e.getMessage());
+        verify(pageMapper, never()).insert(any());
+    }
+
+    @Test
+    public void handedSignCode_isRejected() {
+        TSaltLinkPage r = new TSaltLinkPage();
+        r.setSiteId(0);
+        r.setNodeNo(2);
+        r.setShouldCount(new BigDecimal("10"));
+        r.setSignCode("手写一个签认码");
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service.openLinkPage(r));
+        assertTrue(e.getMessage().contains("随行签认码"), e.getMessage());
+        verify(pageMapper, never()).insert(any());
+    }
+
+    @Test
+    public void handedLackCount_neverStored() {
+        TSaltLinkPage r = new TSaltLinkPage();
+        r.setSiteId(0);
+        r.setNodeNo(2);
+        r.setShouldCount(new BigDecimal("10"));
+        r.setDoneCount(new BigDecimal("3"));
+        r.setLackCount(new BigDecimal("999")); // 人报的欠挂不认
+
+        TSaltLinkPage saved = service.openLinkPage(r);
+        assertEquals(0, new BigDecimal("7").compareTo(saved.getLackCount()));
     }
 
     // ---------- 拦得住：空、负、应挂低于已挂 ----------
@@ -112,7 +163,7 @@ public class TSaltLinkPageServiceImplTest {
         TSaltLinkPage r = new TSaltLinkPage();
         r.setSiteId(0);
         r.setNodeNo(2);
-        r.setDoneCount(1);
+        r.setDoneCount(new BigDecimal("1"));
         IllegalArgumentException e =
                 assertThrows(IllegalArgumentException.class, () -> service.openLinkPage(r));
         assertTrue(e.getMessage().contains("应挂品种数"), e.getMessage());
@@ -122,18 +173,18 @@ public class TSaltLinkPageServiceImplTest {
     @Test
     public void negativeCounts_blocked() {
         IllegalArgumentException e1 = assertThrows(IllegalArgumentException.class,
-                () -> openPage(-1, 0, 2));
+                () -> openPage("-1", "0", 2));
         assertTrue(e1.getMessage().contains("应挂品种数"));
 
         IllegalArgumentException e2 = assertThrows(IllegalArgumentException.class,
-                () -> openPage(10, -2, 2));
+                () -> openPage("10", "-2", 2));
         assertTrue(e2.getMessage().contains("已挂品种数"));
     }
 
     @Test
     public void doneOverShould_blocked_andNamesBothColumns() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> openPage(9, 10, 2));
+                () -> openPage("9", "10", 2));
         assertTrue(e.getMessage().contains("已挂品种数"), e.getMessage());
         assertTrue(e.getMessage().contains("应挂品种数"), e.getMessage());
         verify(pageMapper, never()).insert(any());
@@ -145,7 +196,7 @@ public class TSaltLinkPageServiceImplTest {
         TSaltLinkPage r = new TSaltLinkPage();
         r.setSiteId(999);
         r.setNodeNo(2);
-        r.setShouldCount(5);
+        r.setShouldCount(new BigDecimal("5"));
         assertThrows(IllegalArgumentException.class, () -> service.openLinkPage(r));
     }
 
@@ -155,7 +206,7 @@ public class TSaltLinkPageServiceImplTest {
     public void delistedEnt_cannotOpenNewPage() {
         activeEnt.setStatus(1);
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> openPage(10, 0, 2));
+                () -> openPage("10", "0", 2));
         assertTrue(e.getMessage().contains("摘牌"));
         verify(pageMapper, never()).insert(any());
     }
@@ -169,11 +220,11 @@ public class TSaltLinkPageServiceImplTest {
 
         TSaltLinkPage form = new TSaltLinkPage();
         form.setId(100L);
-        form.setDoneCount(9); // 已挂数一变
+        form.setDoneCount(new BigDecimal("9")); // 已挂数一变
         service.resaveLinkPage(form);
         TSaltLinkPage saved = captureUpdated();
 
-        assertEquals(1, saved.getLackCount());
+        assertEquals(0, new BigDecimal("1").compareTo(saved.getLackCount()));
         assertEquals("GJ1", saved.getBillNo()); // 代号不换手
         verify(pageMapper).updateById(any());
     }
@@ -194,27 +245,77 @@ public class TSaltLinkPageServiceImplTest {
 
         assertEquals("盐岭省—盐泽市", saved.getScopeRoad());
         assertEquals(1, saved.getNodeNo());
-        assertEquals(0, saved.getLackCount());
+        assertEquals(0, new BigDecimal("0").compareTo(saved.getLackCount()));
         assertEquals("GJ2", saved.getBillNo());
         assertEquals("QR2", saved.getSignCode());
     }
 
     @Test
-    public void resave_ignoresHandedLackAndBillNo() {
+    public void resave_changedBillNo_isRejected() {
         TSaltLinkPage old = persistedPage(102L, "GJ3", "QR3", 30, 10, 20, 2,
                 "盐岭省—盐泽市—临卤县", 0);
         when(pageMapper.selectById(102L)).thenReturn(old);
 
         TSaltLinkPage form = new TSaltLinkPage();
         form.setId(102L);
-        form.setDoneCount(25);
-        form.setLackCount(1);          // 人手塞的欠挂
-        form.setBillNo("HACK");        // 人手塞的代号
+        form.setDoneCount(new BigDecimal("25"));
+        form.setBillNo("HACK"); // 人手改了代号
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service.resaveLinkPage(form));
+        assertTrue(e.getMessage().contains("挂接代号"), e.getMessage());
+        verify(pageMapper, never()).updateById(any());
+    }
+
+    @Test
+    public void resave_sameBillNo_unchangedSaveAllowed() {
+        // 编辑场景：代号原样不动，只改数目——保存必须放行，不被自己的唯一校验绊住
+        TSaltLinkPage old = persistedPage(103L, "GJ4", "QR4", 30, 10, 20, 2,
+                "盐岭省—盐泽市—临卤县", 0);
+        when(pageMapper.selectById(103L)).thenReturn(old);
+
+        TSaltLinkPage form = new TSaltLinkPage();
+        form.setId(103L);
+        form.setBillNo("GJ4"); // 原样回传
+        form.setShouldCount(new BigDecimal("30"));
+        form.setDoneCount(new BigDecimal("12"));
         service.resaveLinkPage(form);
         TSaltLinkPage saved = captureUpdated();
 
-        assertEquals(5, saved.getLackCount());
-        assertEquals("GJ3", saved.getBillNo());
+        assertEquals("GJ4", saved.getBillNo());
+        assertEquals(0, new BigDecimal("18").compareTo(saved.getLackCount()));
+    }
+
+    // ---------- 起页署名：钉死成实际开单人，不认表单交来的值 ----------
+
+    @Test
+    public void openPage_operatorName_pinnedAsCreator() {
+        TSaltLinkPage r = new TSaltLinkPage();
+        r.setSiteId(0);
+        r.setNodeNo(2);
+        r.setShouldCount(new BigDecimal("10"));
+        r.setCreateBy("表单上别人填的名字");
+
+        TSaltLinkPage saved = service.openLinkPage(r, "开单人王二");
+
+        assertEquals("开单人王二", saved.getCreateBy());
+    }
+
+    @Test
+    public void resave_creatorStaysFirstOperator() {
+        TSaltLinkPage old = persistedPage(104L, "GJ5", "QR5", 10, 2, 8, 2,
+                "盐岭省—盐泽市—临卤县", 0);
+        old.setCreateBy("头回开单人");
+        when(pageMapper.selectById(104L)).thenReturn(old);
+
+        TSaltLinkPage form = new TSaltLinkPage();
+        form.setId(104L);
+        form.setDoneCount(new BigDecimal("5"));
+        service.resaveLinkPage(form, "后来重挂人");
+        TSaltLinkPage saved = captureUpdated();
+
+        // 更新不碰 create_by：库里的"头回开单人"原样留着；重挂人只进 update_by
+        assertNull(saved.getCreateBy());
+        assertEquals("后来重挂人", saved.getUpdateBy());
     }
 
     // ---------- 名录页一屏：属地圈定 + 三栏同算 ----------
@@ -239,6 +340,22 @@ public class TSaltLinkPageServiceImplTest {
         assertEquals(1, board.getHeldCount());
         assertEquals(4, board.getTotal());
         assertEquals(4, board.getRows().size());
+    }
+
+    @Test
+    public void board_statusFilterGoesIntoQuery() {
+        when(pageMapper.selectList(any())).thenReturn(new ArrayList<TSaltLinkPage>());
+
+        SaltBoardQuery q = new SaltBoardQuery();
+        q.setStatus(1);
+        service.openBoard(q, new TSysUserView("盐岭省—盐泽市—临卤县", 2));
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TSaltLinkPage>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.QueryWrapper.class);
+        verify(pageMapper).selectList(cap.capture());
+        String sql = cap.getValue().getTargetSql().toLowerCase();
+        assertTrue(sql.contains("status = ?"), sql);
+        assertTrue(cap.getValue().getParamNameValuePairs().containsValue(1));
     }
 
     @Test
@@ -289,6 +406,21 @@ public class TSaltLinkPageServiceImplTest {
         assertEquals(10, board.getRows().size());     // 屏上只摆第二屏十条
     }
 
+    @Test
+    public void scoopBoard_andBoard_shareSameRows() {
+        // 列表与导出同一只勺：同筛选、同口径，数目对得上
+        List<TSaltLinkPage> scoop = Arrays.asList(
+                page("GJ-x", 12, 5, 7, 0, "盐岭省—盐泽市—临卤县"));
+        when(pageMapper.selectList(any())).thenReturn(new ArrayList<>(scoop));
+
+        SaltBoardQuery q = new SaltBoardQuery();
+        SaltBoardResult board = service.openBoard(q, new TSysUserView("盐岭省—盐泽市—临卤县", 2));
+        List<TSaltLinkPage> exported = service.scoopBoard(q, new TSysUserView("盐岭省—盐泽市—临卤县", 2));
+
+        assertEquals(board.getTotal(), exported.size());
+        assertEquals(board.getRows().get(0).getLackCount(), exported.get(0).getLackCount());
+    }
+
     // ---------- 进展推进/退回守边界，签认码不清 ----------
 
     @Test
@@ -326,6 +458,25 @@ public class TSaltLinkPageServiceImplTest {
         assertNull(cap.getValue().getDelFlag());
     }
 
+    // ---------- 企业总名录状态变更 ----------
+
+    @Test
+    public void entStatus_change_dlistedBlocksNewPage() {
+        when(entMapper.selectOne(any())).thenReturn(activeEnt);
+        service.changeEntRegisterStatus(0L, 1, "经办人");
+        ArgumentCaptor<TSaltEnt> cap = ArgumentCaptor.forClass(TSaltEnt.class);
+        verify(entMapper).updateById(cap.capture());
+        assertEquals(1, cap.getValue().getStatus().intValue());
+        assertEquals("经办人", cap.getValue().getUpdateBy());
+    }
+
+    @Test
+    public void entStatus_invalidValue_rejected() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.changeEntRegisterStatus(0L, 9, "经办人"));
+        verify(entMapper, never()).updateById(any());
+    }
+
     // ---------- 企业总名录类别排序 ----------
 
     @Test
@@ -349,12 +500,16 @@ public class TSaltLinkPageServiceImplTest {
         return cap.getValue();
     }
 
-    private TSaltLinkPage openPage(int should, int done, int node) {
+    private TSaltLinkPage openPage(String should, String done, int node) {
         TSaltLinkPage r = new TSaltLinkPage();
         r.setSiteId(0);
         r.setNodeNo(node);
-        r.setShouldCount(should);
-        r.setDoneCount(done);
+        if (should != null) {
+            r.setShouldCount(new BigDecimal(should));
+        }
+        if (done != null) {
+            r.setDoneCount(new BigDecimal(done));
+        }
         return service.openLinkPage(r);
     }
 
@@ -367,9 +522,9 @@ public class TSaltLinkPageServiceImplTest {
         p.setSignCode(signCode);
         p.setSiteId(0);
         p.setSiteNo("JY00");
-        p.setShouldCount(should);
-        p.setDoneCount(done);
-        p.setLackCount(lack);
+        p.setShouldCount(BigDecimal.valueOf(should));
+        p.setDoneCount(BigDecimal.valueOf(done));
+        p.setLackCount(BigDecimal.valueOf(lack));
         p.setNodeNo(node);
         p.setScopeRoad(road);
         p.setStatus(status);

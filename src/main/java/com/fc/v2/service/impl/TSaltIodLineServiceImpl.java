@@ -15,11 +15,19 @@ import com.fc.v2.service.ITSaltIodLineService;
 /**
  * 碘含量分档判定线 Service业务层处理（rule-eval 形状）
  *
+ * "在场"的口径全模块一致：未删(del_flag=0)、未停用(status=0)、
+ * 立线之日 effStart <= at < 让位之日 effEnd（effEnd 空着表示至今有效）。
+ * 多条同时在场按让位顺位 priority 降序，并列按 ruleCode 降序——
+ * 定位、列表、角标、可用判定走同一套，不会这处拦那处放。
+ *
  * @author fuce
  * @date 2026-09-14
  */
 @Service
 public class TSaltIodLineServiceImpl implements ITSaltIodLineService {
+
+    /** 线的情形 0在场 1已停用 */
+    private static final int LINE_ACTIVE = 0;
 
     /** 优先级降序；并列按 ruleCode 降序（确定性） */
     private static final Comparator<TSaltIodLine> PRIORITY_THEN_CODE_DESC = new Comparator<TSaltIodLine>() {
@@ -39,15 +47,6 @@ public class TSaltIodLineServiceImpl implements ITSaltIodLineService {
     @javax.annotation.Resource
     private TSaltIodLineMapper saltIodLineMapper;
 
-    /**
-     * 时段比较统一走**墙钟字符串**（yyyy-MM-dd HH:mm:ss）+ 字符串绑定：
-     * JDBC 的 serverTimezone 与本机时区不对称，直接把 java.util.Date 作参数会整体偏移，
-     * 使边界判定在"切换当日"这类用例上随机错档（实测踩到）。
-     */
-    private static String ts(Date d) {
-        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(d);
-    }
-
     @Override
     public TSaltIodLine selectTSaltIodLineById(Long id) {
         return this.saltIodLineMapper.selectById(id);
@@ -58,7 +57,16 @@ public class TSaltIodLineServiceImpl implements ITSaltIodLineService {
         if (at == null) {
             return new java.util.ArrayList<TSaltIodLine>();
         }
-        return this.saltIodLineMapper.selectList(new QueryWrapper<TSaltIodLine>().eq("del_flag", 0));
+        List<TSaltIodLine> all = this.saltIodLineMapper.selectList(new QueryWrapper<TSaltIodLine>()
+                .eq("del_flag", 0).eq("status", LINE_ACTIVE));
+        List<TSaltIodLine> avail = new java.util.ArrayList<TSaltIodLine>();
+        for (TSaltIodLine r : all) {
+            if (isActiveLine(r) && effectiveAt(r, at)) {
+                avail.add(r);
+            }
+        }
+        avail.sort(PRIORITY_THEN_CODE_DESC);
+        return avail;
     }
 
     @Override
@@ -67,6 +75,9 @@ public class TSaltIodLineServiceImpl implements ITSaltIodLineService {
             return 0;
         }
         TSaltIodLine rule = findRule(ruleCode, at);
+        if (rule == null) {
+            return 0;
+        }
         return levelOf(rule, input);
     }
 
@@ -83,6 +94,7 @@ public class TSaltIodLineServiceImpl implements ITSaltIodLineService {
         if (avail.isEmpty()) {
             return 0;
         }
+        // 排序后的头一条就是优先级最高的在场线，不再随便取库里的第一行
         return levelOf(avail.get(0), input);
     }
 
@@ -92,7 +104,11 @@ public class TSaltIodLineServiceImpl implements ITSaltIodLineService {
             return false;
         }
         TSaltIodLine r = this.saltIodLineMapper.selectById(id);
-        return r != null;
+        if (r == null || (r.getDelFlag() != null && r.getDelFlag() == 1)) {
+            return false;
+        }
+        // 停用的线、不在生效窗内的线，旁路（导入/报表）也不许用
+        return (r.getStatus() == null || r.getStatus() == LINE_ACTIVE) && effectiveAt(r, at);
     }
 
     @Override
@@ -100,38 +116,50 @@ public class TSaltIodLineServiceImpl implements ITSaltIodLineService {
         if (at == null) {
             return 0;
         }
-        return this.saltIodLineMapper
-                .selectList(new QueryWrapper<TSaltIodLine>().eq("del_flag", 0)).size();
+        return listAvailable(at).size();
     }
 
     private TSaltIodLine findRule(String ruleCode, Date at) {
         List<TSaltIodLine> hit = this.saltIodLineMapper.selectList(new QueryWrapper<TSaltIodLine>()
-                .eq("del_flag", 0).eq("rule_code", ruleCode));
-        TSaltIodLine newest = null;
+                .eq("del_flag", 0).eq("status", LINE_ACTIVE).eq("rule_code", ruleCode));
+        TSaltIodLine active = null;
         for (TSaltIodLine r : hit) {
-            if (newest == null || r.getEffEnd() == null) {
-                newest = r;
-            } else if (newest.getEffEnd() != null && r.getEffEnd().after(newest.getEffEnd())) {
-                newest = r;
+            if (isActiveLine(r) && effectiveAt(r, at)) {
+                // 同一代号在 at 时刻理论上只该有一版在场；有多版时取让位日最晚的
+                if (active == null || laterEffEnd(r, active)) {
+                    active = r;
+                }
             }
         }
-        return newest;
+        return active;
     }
 
-    /** 阈值解析：档案为主、明细覆盖；两者皆缺返回 null（调用方按不可用处理），精度统一 2 位 */
-    private BigDecimal resolveLimit(TSaltIodLine r, int tier) {
-        if (tier == 1) {
-            return r.getTh1Max();
-        }
-        if (tier == 2) {
-            return r.getTh2Max();
-        }
-        return r.getTh3Max();
+    /** 在场：未删且未停用（SQL 已钉一遍，内存再兜一道，口径不押在单一防线上） */
+    private boolean isActiveLine(TSaltIodLine r) {
+        return (r.getDelFlag() == null || r.getDelFlag() == 0)
+                && (r.getStatus() == null || r.getStatus() == LINE_ACTIVE);
     }
 
-    /** 档案级默认阈值（明细未维护时的回退来源） */
-    private BigDecimal defaultThreshold(TSaltIodLine r, int tier) {
-        return r.getTh1Max();
+    /** a 的让位日是否晚于 b（null 让位日表示至今有效，视为最晚） */
+    private boolean laterEffEnd(TSaltIodLine a, TSaltIodLine b) {
+        if (a.getEffEnd() == null) {
+            return b.getEffEnd() != null;
+        }
+        if (b.getEffEnd() == null) {
+            return false;
+        }
+        return a.getEffEnd().after(b.getEffEnd());
+    }
+
+    /** at 是否落在该线生效区间：effStart <= at < effEnd；两端可空，空端不设限 */
+    private boolean effectiveAt(TSaltIodLine r, Date at) {
+        if (r.getEffStart() != null && at.before(r.getEffStart())) {
+            return false;
+        }
+        if (r.getEffEnd() != null && !at.before(r.getEffEnd())) {
+            return false;
+        }
+        return true;
     }
 
     /** 分档：等于上限取高一档 */

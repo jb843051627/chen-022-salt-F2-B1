@@ -45,6 +45,19 @@ public class SaltRecordFlowController extends BaseController {
     @ResponseBody
     public ResultTable list(TSaltRecordFlow record) {
         QueryWrapper<TSaltRecordFlow> queryWrapper = new QueryWrapper<TSaltRecordFlow>();
+        // 屏上递来的筛选要落进查询；del_flag 由服务层统一钉成 0
+        if (record != null) {
+            if (record.getBizNo() != null && !record.getBizNo().trim().isEmpty()) {
+                queryWrapper.like("biz_no", record.getBizNo().trim());
+            }
+            if (record.getStage() != null) {
+                queryWrapper.eq("stage", record.getStage());
+            }
+            if (record.getStatus() != null) {
+                queryWrapper.eq("status", record.getStatus());
+            }
+        }
+        queryWrapper.orderByDesc("create_time").orderByDesc("id");
         startPage();
         com.github.pagehelper.PageInfo<TSaltRecordFlow> page =
                 new com.github.pagehelper.PageInfo<TSaltRecordFlow>(saltRecordFlowService.selectTSaltRecordFlowList(queryWrapper));

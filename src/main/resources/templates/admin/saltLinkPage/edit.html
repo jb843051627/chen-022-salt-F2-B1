@@ -29,14 +29,14 @@
             <div class="layui-form-item">
                 <label class="layui-form-label">应挂品种数</label>
                 <div class="layui-input-block">
-                    <input type="number" min="0" step="1" name="shouldCount" autocomplete="off"
+                    <input type="number" min="0" step="0.01" name="shouldCount" autocomplete="off"
                            th:value="${page?.shouldCount}" class="layui-input">
                 </div>
             </div>
             <div class="layui-form-item">
                 <label class="layui-form-label">已挂品种数</label>
                 <div class="layui-input-block">
-                    <input type="number" min="0" step="1" name="doneCount" autocomplete="off"
+                    <input type="number" min="0" step="0.01" name="doneCount" autocomplete="off"
                            th:value="${page?.doneCount}" class="layui-input">
                 </div>
             </div>

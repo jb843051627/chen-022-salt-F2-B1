@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.pollix.at/thymeleaf/shiro">
 <head>
     <th:block th:include="include :: header('食盐定点企业总名录')"/>
 </head>
@@ -38,11 +38,20 @@
     {{#  } else { }}<span class="pear-text pear-text-success">在册</span>{{#  } }}
 </script>
 
+<script type="text/html" id="ent-bar">
+    {{#  if(d.status === 1){ }}
+    <button shiro:hasPermission="salt:saltLinkPage:edit" class="pear-btn pear-btn-sm" lay-event="resume">恢复在册</button>
+    {{#  } else { }}
+    <button shiro:hasPermission="salt:saltLinkPage:edit" class="pear-btn pear-btn-danger pear-btn-sm" lay-event="delist">停用（摘牌）</button>
+    {{#  } }}
+</script>
+
 <th:block th:include="include :: footer"/>
 <script>
-    layui.use(['table', 'form'], function () {
+    layui.use(['table', 'form', 'jquery'], function () {
         let table = layui.table;
         let form = layui.form;
+        let $ = layui.jquery;
         let MODULE_PATH = rootPath + "/SaltLinkPageController/";
 
         table.render({
@@ -58,7 +67,8 @@
                 {title: '企业全称', field: 'siteName', align: 'center'},
                 {title: '企业类别', field: 'siteType', align: 'center', width: 150},
                 {title: '属地那一路（省—市—县）', field: 'roadName', align: 'center', width: 240},
-                {title: '名录情形', field: 'status', align: 'center', width: 200, templet: '#ent-status-tpl'}
+                {title: '名录情形', field: 'status', align: 'center', width: 200, templet: '#ent-status-tpl'},
+                {title: '操作', toolbar: '#ent-bar', align: 'center', width: 140}
             ]],
             parseData: function (res) {
                 return {code: res.code, msg: res.msg, count: (res.data || []).length, data: res.data};
@@ -68,6 +78,28 @@
         form.on('submit(ent-query)', function (data) {
             table.reload('ent-table', {where: data.field});
             return false;
+        });
+
+        // 名录这一处改状态，挂接页开页口子立刻按同一状态拦/放
+        table.on('tool(ent-table)', function (obj) {
+            let delist = obj.event === 'delist';
+            if (obj.event !== 'delist' && obj.event !== 'resume') { return; }
+            let tip = delist
+                ? '确定把「' + obj.data.siteName + '」停用（摘牌）？停用后不能再对它起新页，旧页仍在册。'
+                : '确定恢复「' + obj.data.siteName + '」在册？';
+            layer.confirm(tip, {icon: 3, title: '企业总名录'}, function (index) {
+                layer.close(index);
+                $.ajax({
+                    url: MODULE_PATH + 'entStatus',
+                    type: 'post', dataType: 'json',
+                    data: {id: obj.data.id, status: delist ? 1 : 0},
+                    success: function (r) {
+                        layer.msg(r.msg, {icon: r.code === 200 ? 1 : 2, time: 1500}, function () {
+                            if (r.code === 200) table.reload('ent-table');
+                        });
+                    }
+                });
+            });
         });
     });
 </script>

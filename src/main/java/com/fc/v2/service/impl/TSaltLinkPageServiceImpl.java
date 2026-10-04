@@ -1,8 +1,9 @@
 package com.fc.v2.service.impl;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 
@@ -29,6 +30,9 @@ import org.springframework.stereotype.Service;
  * 2）欠挂品种数折出几（应挂-已挂，起页、已挂数一变、换挂靠层三个场合重算后写回）；
  * 3）按属地那一路该露哪几页（压在那一层底下，县不见邻县、市不夹别市）；
  * 4）名录页三栏（在册/已挂讫/压页）与逐页行册同一次算。
+ *
+ * 口径：应挂/已挂/欠挂一律按档案的两位小数收，多于两位四舍五入折成两位，
+ * 屏上列表与导出取的是同一次 scoop，行数、数目不会长出两张脸。
  *
  * @author fuce
  * @date 2026-09-12
@@ -82,7 +86,7 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         // 维持原签名：老来路拿不到回执细节，只知页起没起来；
         // 要说清毛病出在哪一栏，走同义方法 openLinkPage。
         try {
-            openLinkPage(record);
+            openLinkPage(record, null);
             return 1;
         } catch (IllegalArgumentException e) {
             return 0;
@@ -91,6 +95,11 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
 
     @Override
     public TSaltLinkPage openLinkPage(TSaltLinkPage record) {
+        return openLinkPage(record, null);
+    }
+
+    @Override
+    public TSaltLinkPage openLinkPage(TSaltLinkPage record, String operator) {
         if (record == null) {
             throw new IllegalArgumentException("递上来的是空页，起不来");
         }
@@ -101,12 +110,15 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
             throw new IllegalArgumentException("所对定点企业已摘牌，不再开新页");
         }
 
+        // 两处码子归系统发：人手写一个递上来不收——不静默读没，当场点名叫出
+        rejectHandedCode(record.getBillNo(), "挂接代号");
+        rejectHandedCode(record.getSignCode(), "随行签认码");
+
         int nodeNo = normalizeNodeNo(record.getNodeNo());
-        int should = requireShould(record.getShouldCount());
-        int done = normalizeDone(record.getDoneCount());
+        BigDecimal should = requireShould(record.getShouldCount());
+        BigDecimal done = normalizeDone(record.getDoneCount());
         validateCounts(should, done);
 
-        // 两处码子归系统发：人手写一个递上来不收，当场抹掉重发
         record.setBillNo(issueBillNo());
         record.setSignCode(issueSignCode());
         record.setSiteNo(ent.getSiteNo());
@@ -115,10 +127,14 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         record.setShouldCount(should);
         record.setDoneCount(done);
         // 欠挂不劳人报：交来的值不认，由服务层折出写回
-        record.setLackCount(should - done);
+        record.setLackCount(should.subtract(done));
         // 进展也归系统管：头一回起页一律待挂
         record.setStatus(STATUS_PENDING);
         record.setDelFlag(0);
+        // 起页署名钉死成实际开单人，不认表单上谁填了什么
+        if (StringUtils.isNotEmpty(operator)) {
+            record.setCreateBy(operator);
+        }
 
         this.baseMapper.insert(record);
         return record;
@@ -140,6 +156,11 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
 
     @Override
     public TSaltLinkPage resaveLinkPage(TSaltLinkPage record) {
+        return resaveLinkPage(record, null);
+    }
+
+    @Override
+    public TSaltLinkPage resaveLinkPage(TSaltLinkPage record, String operator) {
         if (record == null || record.getId() == null) {
             throw new IllegalArgumentException("没点名要重挂哪一页（id 空着）");
         }
@@ -148,19 +169,29 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
             throw new IllegalArgumentException("这一页在库里找不着");
         }
 
+        // 挂接代号不换手：递上来的值跟旧号不一样，就是有人动过手，当场拒绝；
+        // 一样（或没递）才放行——代号原样不动，保存不会被自己绊住。
+        if (StringUtils.isNotEmpty(record.getBillNo())
+                && !record.getBillNo().equals(old.getBillNo())) {
+            throw new IllegalArgumentException("挂接代号归系统发、不换手，这一页保存不了");
+        }
+        if (StringUtils.isNotEmpty(record.getSignCode())
+                && !record.getSignCode().equals(old.getSignCode())) {
+            throw new IllegalArgumentException("随行签认码归系统发，这一页保存不了");
+        }
+
         // 所对企业：交了新值按新值，没交沿用旧值。
         // 旧页所对的企业哪怕后来摘了牌，页照旧算在册、照旧能改——摘牌只拦新开页。
         Integer siteId = record.getSiteId() != null ? record.getSiteId() : old.getSiteId();
         TSaltEnt ent = loadEnt(siteId);
 
         int nodeNo = normalizeNodeNo(record.getNodeNo() != null ? record.getNodeNo() : old.getNodeNo());
-        int should = requireShould(record.getShouldCount() != null
+        BigDecimal should = requireShould(record.getShouldCount() != null
                 ? record.getShouldCount() : old.getShouldCount());
-        int done = normalizeDone(record.getDoneCount() != null
+        BigDecimal done = normalizeDone(record.getDoneCount() != null
                 ? record.getDoneCount() : old.getDoneCount());
         validateCounts(should, done);
 
-        // 挂接代号不换手；签认码、欠挂都不认人手交来的值
         record.setBillNo(old.getBillNo());
         record.setSignCode(old.getSignCode());
         record.setSiteId(Integer.valueOf(ent.getId().intValue()));
@@ -169,9 +200,14 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         record.setNodeNo(nodeNo);
         record.setShouldCount(should);
         record.setDoneCount(done);
-        record.setLackCount(should - done);
+        record.setLackCount(should.subtract(done));
         record.setStatus(old.getStatus() == null ? STATUS_PENDING : old.getStatus());
         record.setDelFlag(0);
+        // 开单人始终是头回起页那位：更新不带 create_by（null 不进 SET 子句），库里的署名原样留着；
+        // 重挂的人只落到 update_by 上
+        if (StringUtils.isNotEmpty(operator)) {
+            record.setUpdateBy(operator);
+        }
         record.setUpdateTime(new Date());
 
         this.baseMapper.updateById(record);
@@ -184,44 +220,7 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
 
     @Override
     public SaltBoardResult openBoard(SaltBoardQuery query, TSysUserView operator) {
-        SaltBoardResult result = new SaltBoardResult();
-        if (operator == null || StringUtils.isEmpty(operator.getDeptName())) {
-            throw new IllegalArgumentException("操作人没有属地，名录页开不了");
-        }
-
-        int level = operator.getLevel();
-        String scopeRoad = operator.getDeptName();
-        result.setScopeRoad(scopeRoad);
-
-        QueryWrapper<TSaltLinkPage> w = new QueryWrapper<TSaltLinkPage>()
-                .eq("del_flag", 0)
-                // 页压在属地那一层底下：只露压在本层的页
-                .eq("node_no", level)
-                .eq("scope_road", scopeRoad);
-
-        if (query != null) {
-            if (StringUtils.isNotEmpty(query.getBillNo())) {
-                w.like("bill_no", query.getBillNo().trim());
-            }
-            if (StringUtils.isNotEmpty(query.getSiteNo())) {
-                w.like("site_no", query.getSiteNo().trim());
-            }
-            if (StringUtils.isNotEmpty(query.getSiteType())) {
-                // 企业类别在企业总名录上：先按类别（咬中几个字也算）圈出企业代号
-                List<String> siteNos = siteNosByTypeLike(query.getSiteType().trim());
-                if (siteNos.isEmpty()) {
-                    result.setRows(Collections.<TSaltLinkPage>emptyList());
-                    result.setTotal(0L);
-                    return result;
-                }
-                w.in("site_no", siteNos);
-            }
-        }
-        w.orderByDesc("create_time").orderByDesc("id");
-
-        // 同一次算：一次查出这批页，三栏就这批行点数，行册再从这批行里切一屏。
-        // 不另查一次总数，更不拿旁处的行凑数。
-        List<TSaltLinkPage> all = this.baseMapper.selectList(w);
+        List<TSaltLinkPage> all = scoopBoard(query, operator);
 
         int registered = 0;
         int done = 0;
@@ -243,15 +242,64 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         List<TSaltLinkPage> pageRows = new ArrayList<TSaltLinkPage>(all.subList(from, to));
         fillEntInfo(pageRows);
 
+        SaltBoardResult result = new SaltBoardResult();
         result.setRows(pageRows);
         result.setTotal(all.size());
         result.setRegisteredCount(registered);
         result.setDoneCount(done);
         result.setHeldCount(held);
+        if (operator != null) {
+            result.setScopeRoad(operator.getDeptName());
+        }
         return result;
     }
 
-    /** 给本屏逐页补上企业全称、类别（批量查一次总名录；摘牌企业也照补，旧页照旧在册） */
+    /**
+     * 名录屏与导出共用的同一把勺子：同路、同层、同筛选、同小数口径。
+     * 列表从这把勺里切一屏，导出整勺端走——两处的行数与数目不可能对不上。
+     */
+    @Override
+    public List<TSaltLinkPage> scoopBoard(SaltBoardQuery query, TSysUserView operator) {
+        if (operator == null || StringUtils.isEmpty(operator.getDeptName())) {
+            throw new IllegalArgumentException("操作人没有属地，名录页开不了");
+        }
+
+        int level = operator.getLevel();
+        String scopeRoad = operator.getDeptName();
+
+        QueryWrapper<TSaltLinkPage> w = new QueryWrapper<TSaltLinkPage>()
+                .eq("del_flag", 0)
+                // 页压在属地那一层底下：只露压在本层的页
+                .eq("node_no", level)
+                .eq("scope_road", scopeRoad);
+
+        if (query != null) {
+            if (StringUtils.isNotEmpty(query.getBillNo())) {
+                w.like("bill_no", query.getBillNo().trim());
+            }
+            if (StringUtils.isNotEmpty(query.getSiteNo())) {
+                w.like("site_no", query.getSiteNo().trim());
+            }
+            if (query.getStatus() != null) {
+                w.eq("status", query.getStatus().intValue());
+            }
+            if (StringUtils.isNotEmpty(query.getSiteType())) {
+                // 企业类别在企业总名录上：先按类别（咬中几个字也算）圈出企业代号
+                List<String> siteNos = siteNosByTypeLike(query.getSiteType().trim());
+                if (siteNos.isEmpty()) {
+                    return new ArrayList<TSaltLinkPage>();
+                }
+                w.in("site_no", siteNos);
+            }
+        }
+        w.orderByDesc("create_time").orderByDesc("id");
+
+        List<TSaltLinkPage> all = this.baseMapper.selectList(w);
+        fillEntInfo(all);
+        return all;
+    }
+
+    /** 给逐页补上企业全称、类别（批量查一次总名录；摘牌企业也照补，旧页照旧在册） */
     private void fillEntInfo(List<TSaltLinkPage> rows) {
         if (rows.isEmpty()) {
             return;
@@ -294,6 +342,28 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         return saltEntMapper.selectList(w);
     }
 
+    @Override
+    public int changeEntRegisterStatus(Long id, int targetStatus, String operator) {
+        if (id == null) {
+            throw new IllegalArgumentException("没点名要改总名录上的哪一家");
+        }
+        if (targetStatus != 0 && targetStatus != ENT_DELISTED) {
+            throw new IllegalArgumentException("名录情形只许 0在册 / 1已摘牌");
+        }
+        TSaltEnt ent = saltEntMapper.selectOne(new QueryWrapper<TSaltEnt>()
+                .eq("id", id).eq("del_flag", 0));
+        if (ent == null) {
+            throw new IllegalArgumentException("这家企业不在总名录上");
+        }
+        TSaltEnt update = new TSaltEnt();
+        update.setId(id);
+        update.setStatus(targetStatus);
+        if (StringUtils.isNotEmpty(operator)) {
+            update.setUpdateBy(operator);
+        }
+        return saltEntMapper.updateById(update);
+    }
+
     // ------------------------------------------------------------------
     // 进展逐态推进 / 退回
     // ------------------------------------------------------------------
@@ -308,7 +378,7 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
             return 0;
         }
         int st = cur.getStatus() == null ? STATUS_PENDING : cur.getStatus();
-        // 守边界：已挂讫不能再推，不允许跳态
+        // 守边界：压页不能再推，不允许跳态
         if (st >= STATUS_HELD) {
             return 0;
         }
@@ -381,6 +451,13 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
     // 校验与折数——两条起页来路、重挂保存都走这一套说法
     // ------------------------------------------------------------------
 
+    /** 人手递了系统发的码子，不静默读没：点名叫出，整页不进库 */
+    private void rejectHandedCode(String code, String column) {
+        if (StringUtils.isNotEmpty(code)) {
+            throw new IllegalArgumentException(column + "归系统发，人手填的值不收，这一页起不来");
+        }
+    }
+
     private TSaltEnt loadEnt(Integer siteId) {
         if (siteId == null) {
             throw new IllegalArgumentException("所对定点企业那一栏空着，页起不来");
@@ -393,31 +470,33 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         return ent;
     }
 
-    private int requireShould(Integer should) {
+    private BigDecimal requireShould(BigDecimal should) {
         if (should == null) {
             throw new IllegalArgumentException("应挂品种数那一栏空着递，这一页起不来");
         }
-        if (should < 0) {
+        if (should.signum() < 0) {
             throw new IllegalArgumentException("应挂品种数那一栏递进来是负数，这一页起不来");
         }
-        return should;
+        // 档案口径两位：写几位来都折成两位（四舍五入），不许五位照存
+        return should.setScale(2, RoundingMode.HALF_UP);
     }
 
-    private int normalizeDone(Integer done) {
+    private BigDecimal normalizeDone(BigDecimal done) {
         if (done == null) {
-            return 0;
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         }
-        if (done < 0) {
+        if (done.signum() < 0) {
             throw new IllegalArgumentException("已挂品种数那一栏递进来是负数，进不了库");
         }
-        return done;
+        return done.setScale(2, RoundingMode.HALF_UP);
     }
 
-    private void validateCounts(int should, int done) {
-        if (done > should) {
+    private void validateCounts(BigDecimal should, BigDecimal done) {
+        if (done.compareTo(should) > 0) {
             // 同一毛病从两面都说得通：应挂低过已挂 / 已挂高过应挂，回执把两栏都点出来
             throw new IllegalArgumentException(
-                    "已挂品种数(" + done + ")高过应挂品种数(" + should + ")，进不了库");
+                    "已挂品种数(" + done.toPlainString() + ")高过应挂品种数("
+                            + should.toPlainString() + ")，进不了库");
         }
     }
 

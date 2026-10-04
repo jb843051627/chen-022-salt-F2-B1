@@ -52,11 +52,23 @@
                         <option value="跨省批发企业">跨省批发企业</option>
                     </select>
                 </div>
+                <label class="layui-form-label">进展</label>
+                <div class="layui-input-inline">
+                    <select name="status">
+                        <option value="">全部进展</option>
+                        <option value="0">待挂</option>
+                        <option value="1">已挂讫</option>
+                        <option value="2">压页</option>
+                    </select>
+                </div>
                 <button class="pear-btn pear-btn-md pear-btn-primary" lay-submit lay-filter="page-query">
                     <i class="layui-icon layui-icon-search"></i> 寻页
                 </button>
                 <button type="reset" class="pear-btn pear-btn-md">
                     <i class="layui-icon layui-icon-refresh"></i> 重置
+                </button>
+                <button class="pear-btn pear-btn-md" id="btn-export" type="button">
+                    <i class="layui-icon layui-icon-export"></i> 导出
                 </button>
             </div>
         </form>
@@ -114,6 +126,8 @@
             skin: 'line',
             toolbar: '#page-toolbar',
             limit: 10,
+            // 屏上可选每页条数；选几，接口就按几切，条数与选择一致
+            limits: [10, 20, 50, 100],
             cols: [[
                 {title: 'ID', field: 'id', align: 'center', hide: true},
                 {title: '挂接代号', field: 'billNo', align: 'center', width: 190},
@@ -122,11 +136,12 @@
                 {title: '企业类别', field: 'siteType', align: 'center', width: 130},
                 {title: '挂靠层', field: 'nodeNo', align: 'center', width: 80, templet: '#node-tpl'},
                 {title: '归属地那一路', field: 'scopeRoad', align: 'center', width: 200},
-                {title: '应挂', field: 'shouldCount', align: 'center', width: 70},
-                {title: '已挂', field: 'doneCount', align: 'center', width: 70},
+                {title: '应挂', field: 'shouldCount', align: 'center', width: 90},
+                {title: '已挂', field: 'doneCount', align: 'center', width: 90},
                 // 欠挂只许看不许改：名录页上摆出来，表单里没有它的录入位
-                {title: '欠挂', field: 'lackCount', align: 'center', width: 70},
+                {title: '欠挂', field: 'lackCount', align: 'center', width: 90},
                 {title: '进展', field: 'status', align: 'center', width: 90, templet: '#status-tpl'},
+                {title: '开单人', field: 'createBy', align: 'center', width: 110},
                 {title: '操作', toolbar: '#page-bar', align: 'center', width: 110}
             ]],
             parseData: function (res) {
@@ -143,9 +158,23 @@
             }
         });
 
+        // 记着当前筛选：翻页、换条数、导出都用同一套条件
+        let currentWhere = {};
+
         form.on('submit(page-query)', function (data) {
+            currentWhere = data.field;
             table.reload('link-page-table', {where: data.field, page: {curr: 1}});
             return false;
+        });
+
+        // 导出与列表同一来路、同一筛选；空串的项不带去，免得被当成"咬中一个空字"
+        $('#btn-export').on('click', function () {
+            let o = {};
+            $.each(currentWhere, function (k, v) {
+                if (v !== '') { o[k] = v; }
+            });
+            let q = $.param(o);
+            location.href = MODULE_PATH + 'export' + (q ? '?' + q : '');
         });
 
         table.on('tool(link-page-table)', function (obj) {

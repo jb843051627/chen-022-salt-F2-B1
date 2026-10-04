@@ -1,7 +1,14 @@
 package com.fc.v2.controller.admin;
 
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+
+import javax.servlet.http.HttpServletResponse;
 
 import com.fc.v2.common.base.BaseController;
 import com.fc.v2.common.domain.AjaxResult;
@@ -69,13 +76,9 @@ public class SaltLinkPageController extends BaseController {
                            @RequestParam(value = "limit", defaultValue = "10") int limit,
                            @RequestParam(value = "billNo", required = false) String billNo,
                            @RequestParam(value = "siteNo", required = false) String siteNo,
-                           @RequestParam(value = "siteType", required = false) String siteType) {
-        SaltBoardQuery query = new SaltBoardQuery();
-        query.setPage(page);
-        query.setLimit(limit);
-        query.setBillNo(billNo);
-        query.setSiteNo(siteNo);
-        query.setSiteType(siteType);
+                           @RequestParam(value = "siteType", required = false) String siteType,
+                           @RequestParam(value = "status", required = false) Integer status) {
+        SaltBoardQuery query = buildQuery(page, limit, billNo, siteNo, siteType, status);
 
         SaltBoardResult board;
         try {
@@ -95,6 +98,54 @@ public class SaltLinkPageController extends BaseController {
         return json;
     }
 
+    /**
+     * 导出：与列表同一把勺子（scoopBoard），同样的属地、筛选、两位小数口径，
+     * 不分页整勺端走。屏上几栏、什么次序，导出就是几栏、什么次序，数字不会对不上。
+     */
+    @ApiOperation(value = "名录页导出", notes = "与列表同一次取数口径，CSV 整勺导出")
+    @GetMapping("/export")
+    @RequiresPermissions("salt:saltLinkPage:list")
+    public void export(@RequestParam(value = "billNo", required = false) String billNo,
+                       @RequestParam(value = "siteNo", required = false) String siteNo,
+                       @RequestParam(value = "siteType", required = false) String siteType,
+                       @RequestParam(value = "status", required = false) Integer status,
+                       HttpServletResponse response) throws IOException {
+        SaltBoardQuery query = buildQuery(1, Integer.MAX_VALUE, billNo, siteNo, siteType, status);
+        List<TSaltLinkPage> rows;
+        try {
+            rows = saltLinkPageService.scoopBoard(query, currentOperator());
+        } catch (IllegalArgumentException e) {
+            response.setContentType("text/plain;charset=UTF-8");
+            response.getWriter().write(e.getMessage());
+            return;
+        }
+
+        response.setContentType("text/csv;charset=UTF-8");
+        String fileName = URLEncoder.encode("企业品种挂接簿.csv", StandardCharsets.UTF_8.name()).replace("+", "%20");
+        response.setHeader("Content-Disposition", "attachment;filename*=UTF-8''" + fileName);
+        // UTF-8 BOM，Excel 打开不乱码
+        response.getOutputStream().write(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF});
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("挂接代号,企业代号,企业全称,企业类别,挂靠层,归属地那一路,应挂,已挂,欠挂,进展,开单人,开单时间\r\n");
+        for (TSaltLinkPage p : rows) {
+            sb.append(csv(p.getBillNo())).append(',')
+                    .append(csv(p.getSiteNo())).append(',')
+                    .append(csv(p.getSiteName())).append(',')
+                    .append(csv(p.getSiteType())).append(',')
+                    .append(csv(nodeName(p.getNodeNo()))).append(',')
+                    .append(csv(p.getScopeRoad())).append(',')
+                    .append(num(p.getShouldCount())).append(',')
+                    .append(num(p.getDoneCount())).append(',')
+                    .append(num(p.getLackCount())).append(',')
+                    .append(csv(statusName(p.getStatus()))).append(',')
+                    .append(csv(p.getCreateBy())).append(',')
+                    .append(p.getCreateTime() == null ? "" : String.format("%tF %<tT", p.getCreateTime()))
+                    .append("\r\n");
+        }
+        response.getOutputStream().write(sb.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
     @ApiOperation(value = "企业总名录跳转", notes = "企业总名录跳转")
     @GetMapping("/entView")
     @RequiresPermissions("salt:saltLinkPage:view")
@@ -109,6 +160,26 @@ public class SaltLinkPageController extends BaseController {
     @ResponseBody
     public AjaxResult entList(@RequestParam(value = "siteType", required = false) String siteType) {
         return AjaxResult.successData(0, saltLinkPageService.listEntRegister(siteType));
+    }
+
+    /**
+     * 企业总名录状态变更（停用=摘牌 / 恢复=在册）。挂接页开页时认的就是这一个状态，
+     * 名录这边改了，起页口子立刻拦住——两个模块不各存一套口径。
+     */
+    @ApiOperation(value = "企业总名录状态变更", notes = "停用(摘牌)/恢复(在册)")
+    @PostMapping("/entStatus")
+    @RequiresPermissions("salt:saltLinkPage:edit")
+    @ResponseBody
+    public AjaxResult entStatus(@RequestParam("id") Long id, @RequestParam("status") Integer status) {
+        if (status == null || (status != 0 && status != 1)) {
+            return AjaxResult.error("名录情形只许 0在册 / 1已摘牌");
+        }
+        try {
+            saltLinkPageService.changeEntRegisterStatus(id, status, ShiroUtils.getLoginName());
+            return AjaxResult.success(status == 1 ? "已停用（摘牌），该企业不能再起新页" : "已恢复在册");
+        } catch (IllegalArgumentException e) {
+            return AjaxResult.error(e.getMessage());
+        }
     }
 
     @ApiOperation(value = "新增起页跳转", notes = "新增起页跳转")
@@ -127,8 +198,8 @@ public class SaltLinkPageController extends BaseController {
     }
 
     /**
-     * 头一回起页。数目按原文收，空着/带小数/负数在这一层折成整数时点名叫出，
-     * 折好后交服务层同一套校验——与 /edit 是同一份折法、同一种回执。
+     * 头一回起页。数目按原文收，空着/负数在这一层点名叫出，
+     * 小数折成档案口径的两位（四舍五入）后交服务层同一套校验——与 /edit 是同一份折法、同一种回执。
      */
     @ApiOperation(value = "起页", notes = "头一回起页，系统发挂接代号与签认码")
     @PostMapping("/add")
@@ -142,7 +213,7 @@ public class SaltLinkPageController extends BaseController {
             return AjaxResult.error(e.getMessage());
         }
         try {
-            TSaltLinkPage saved = saltLinkPageService.openLinkPage(record);
+            TSaltLinkPage saved = saltLinkPageService.openLinkPage(record, ShiroUtils.getLoginName());
             return AjaxResult.success("起页成功，挂接代号：" + saved.getBillNo());
         } catch (IllegalArgumentException e) {
             return AjaxResult.error(e.getMessage());
@@ -173,7 +244,7 @@ public class SaltLinkPageController extends BaseController {
             return AjaxResult.error(e.getMessage());
         }
         try {
-            saltLinkPageService.resaveLinkPage(record);
+            saltLinkPageService.resaveLinkPage(record, ShiroUtils.getLoginName());
             return AjaxResult.success("重挂保存成功");
         } catch (IllegalArgumentException e) {
             return AjaxResult.error(e.getMessage());
@@ -207,6 +278,18 @@ public class SaltLinkPageController extends BaseController {
     // ------------------------------------------------------------------
     // 两条起页来路共用的同一份折法——屏上长不出第二种结果
     // ------------------------------------------------------------------
+
+    private SaltBoardQuery buildQuery(int page, int limit, String billNo, String siteNo,
+                                      String siteType, Integer status) {
+        SaltBoardQuery query = new SaltBoardQuery();
+        query.setPage(page);
+        query.setLimit(limit);
+        query.setBillNo(billNo);
+        query.setSiteNo(siteNo);
+        query.setSiteType(siteType);
+        query.setStatus(status);
+        return query;
+    }
 
     private TSaltLinkPage bindPage(SaltLinkPageForm form, Long id) {
         if (form == null) {
@@ -245,30 +328,56 @@ public class SaltLinkPageController extends BaseController {
     }
 
     /**
-     * 数目原文折整数：空着、带小数、不是数、负数，一律点名叫出是哪一栏。
+     * 数目原文折数：空着、不是数、负数，一律点名叫出是哪一栏。
+     * 小数照收，但只按档案口径留两位（四舍五入）；多于两位的在接口层先折，不许原样灌进库。
      */
-    private Integer parseCount(String raw, String column) {
+    private BigDecimal parseCount(String raw, String column) {
         if (StringUtils.isEmpty(raw)) {
             // 已挂空着按0起算；应挂空着不许起（服务层再把这道关）
             if ("应挂品种数".equals(column)) {
                 return null;
             }
-            return 0;
+            return BigDecimal.ZERO.setScale(2);
         }
         String s = raw.trim();
-        if (s.indexOf('.') >= 0) {
-            throw new IllegalArgumentException(column + "那一栏递进来带小数（" + s + "），这一页起不来");
-        }
-        int v;
+        BigDecimal v;
         try {
-            v = Integer.parseInt(s);
+            v = new BigDecimal(s);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(column + "那一栏不是个整数（" + s + "），这一页起不来");
+            throw new IllegalArgumentException(column + "那一栏不是个数（" + s + "），这一页起不来");
         }
-        if (v < 0) {
+        if (v.signum() < 0) {
             throw new IllegalArgumentException(column + "那一栏递进来是负数（" + s + "），这一页起不来");
         }
+        return v.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private String csv(String v) {
+        if (v == null) {
+            return "";
+        }
+        if (v.indexOf(',') >= 0 || v.indexOf('"') >= 0 || v.indexOf('\n') >= 0) {
+            return '"' + v.replace("\"", "\"\"") + '"';
+        }
         return v;
+    }
+
+    private String num(BigDecimal v) {
+        return v == null ? "" : v.toPlainString();
+    }
+
+    private String nodeName(Integer node) {
+        if (node == null) {
+            return "";
+        }
+        return node == 0 ? "省" : node == 1 ? "市" : "县";
+    }
+
+    private String statusName(Integer status) {
+        if (status == null) {
+            return "待挂";
+        }
+        return status == 1 ? "已挂讫" : status == 2 ? "压页" : "待挂";
     }
 
     /**

@@ -28,15 +28,15 @@
             <div class="layui-form-item">
                 <label class="layui-form-label">应挂品种数</label>
                 <div class="layui-input-block">
-                    <input type="number" min="0" step="1" name="shouldCount" autocomplete="off"
-                           placeholder="只许填非负整数，空着起不来" class="layui-input">
+                    <input type="number" min="0" step="0.01" name="shouldCount" autocomplete="off"
+                           placeholder="非负数，小数按档案口径留两位（四舍五入）" class="layui-input">
                 </div>
             </div>
             <div class="layui-form-item">
                 <label class="layui-form-label">已挂品种数</label>
                 <div class="layui-input-block">
-                    <input type="number" min="0" step="1" name="doneCount" autocomplete="off"
-                           placeholder="只许填非负整数，不得高过应挂" class="layui-input">
+                    <input type="number" min="0" step="0.01" name="doneCount" autocomplete="off"
+                           placeholder="非负数，不得高过应挂；留空按 0" class="layui-input">
                 </div>
             </div>
             <div class="layui-form-item">

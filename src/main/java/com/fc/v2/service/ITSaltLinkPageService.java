@@ -44,12 +44,21 @@ public interface ITSaltLinkPageService {
     TSaltLinkPage openLinkPage(TSaltLinkPage record);
 
     /**
+     * 起页并把开单人钉死在起页署名上：operator 为实际登录操作人，
+     * 表单上填谁都不认。没有登录上下文的老来路走 {@link #openLinkPage(TSaltLinkPage)}。
+     */
+    TSaltLinkPage openLinkPage(TSaltLinkPage record, String operator);
+
+    /**
      * 换挂靠层 / 已挂数变动后重挂保存：与起页同一套校验和欠挂重算，
-     * 挂接代号不换手；欠挂一栏由服务层写回，交来的值一律不认。
+     * 挂接代号不换手（递来的与旧号不一样即拒）；欠挂一栏由服务层写回，交来的值一律不认。
      *
      * @return 落库后的页
      */
     TSaltLinkPage resaveLinkPage(TSaltLinkPage record);
+
+    /** 重挂保存并记录实际操作人（起页署名仍是头回开单人，不被重挂改写） */
+    TSaltLinkPage resaveLinkPage(TSaltLinkPage record, String operator);
 
     /**
      * 名录页开一屏：按操作人归属的属地那一路圈定可见页（县不见邻县、市不夹别市），
@@ -57,8 +66,20 @@ public interface ITSaltLinkPageService {
      */
     SaltBoardResult openBoard(SaltBoardQuery query, TSysUserView operator);
 
+    /**
+     * 名录屏与导出共用的同一把勺子：按同一路、同一层、同一筛选、同一小数口径
+     * 取出整批行（已补企业全称/类别）。列表切一屏，导出整勺端走，两处数字必须一致。
+     */
+    List<TSaltLinkPage> scoopBoard(SaltBoardQuery query, TSysUserView operator);
+
     /** 企业总名录：一家一行（代号、全称、类别、属地到县），类别按三类固定次序排 */
     List<TSaltEnt> listEntRegister(String siteType);
+
+    /**
+     * 企业总名录状态变更（0在册 / 1已摘牌）。摘牌只拦新开页，旧页照旧在册。
+     * 名录屏的"停用/恢复"与挂接页开页拦截走的是同一条名录情形，没有第二套口径。
+     */
+    int changeEntRegisterStatus(Long id, int targetStatus, String operator);
 
     /** 推进一态（待挂→已挂讫→压页，逐态推进，不得跳态） */
     int advanceTSaltLinkPage(Long id);

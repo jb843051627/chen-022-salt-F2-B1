@@ -46,9 +46,9 @@ CREATE TABLE IF NOT EXISTS t_salt_link_page (
   site_id int DEFAULT NULL COMMENT '所属定点企业',
   site_no varchar(64) DEFAULT NULL COMMENT '所属企业代号',
   scope_road varchar(128) DEFAULT NULL COMMENT '页归属的属地那一路(省—市—县，压在企业属地那一层)',
-  should_count int DEFAULT NULL COMMENT '应挂品种数',
-  done_count int DEFAULT NULL COMMENT '已挂品种数',
-  lack_count int DEFAULT NULL COMMENT '欠挂品种数（服务层算后写回，只许看不许改）',
+  should_count decimal(12,2) DEFAULT NULL COMMENT '应挂品种数（档案口径两位，写入四舍五入）',
+  done_count decimal(12,2) DEFAULT NULL COMMENT '已挂品种数（档案口径两位，写入四舍五入）',
+  lack_count decimal(12,2) DEFAULT NULL COMMENT '欠挂品种数（服务层算后写回，只许看不许改；两位小数）',
   content varchar(255) DEFAULT NULL COMMENT '随页交来的标签要件',
   status int DEFAULT NULL COMMENT '挂接进展 0待挂 1已挂讫 2压页',
   del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除',
@@ -126,6 +126,13 @@ CREATE TABLE IF NOT EXISTS t_salt_year_task (
   remark varchar(500) DEFAULT NULL COMMENT '备注',
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='年检到期催办单';
+
+-- 已部署旧库的口径迁移（幂等，可重复执行）：应挂/已挂/欠挂由 int 改为两位小数，
+-- 与档案 decimal(12,2) 对齐；存量整数按 12.00 落位。
+ALTER TABLE t_salt_link_page
+  MODIFY COLUMN should_count decimal(12,2) DEFAULT NULL COMMENT '应挂品种数（档案口径两位，写入四舍五入）',
+  MODIFY COLUMN done_count decimal(12,2) DEFAULT NULL COMMENT '已挂品种数（档案口径两位，写入四舍五入）',
+  MODIFY COLUMN lack_count decimal(12,2) DEFAULT NULL COMMENT '欠挂品种数（服务层算后写回，只许看不许改；两位小数）';
 
 -- 初始档案数据（状态约定：id=1 启用 / id=2 停用）
 -- t_salt_ent 预置两条种子名录：id=0 在册、id=1 已摘牌；企业代号与类别按各表既有排法给值。

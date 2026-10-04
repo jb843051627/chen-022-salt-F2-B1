@@ -12,6 +12,7 @@ import io.swagger.annotations.ApiModel;
 import io.swagger.annotations.ApiModelProperty;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.util.Date;
 
 /**
@@ -61,20 +62,20 @@ public class TSaltLinkPage implements Serializable {
     @ApiModelProperty(value = "页归属的属地那一路(省—市—县)")
     private String scopeRoad;
 
-    /** 应挂品种数 */
+    /** 应挂品种数（档案口径：两位小数，写入时四舍五入） */
     @TableField("should_count")
-    @ApiModelProperty(value = "应挂品种数")
-    private Integer shouldCount;
+    @ApiModelProperty(value = "应挂品种数（两位小数）")
+    private BigDecimal shouldCount;
 
-    /** 已挂品种数 */
+    /** 已挂品种数（档案口径：两位小数，写入时四舍五入） */
     @TableField("done_count")
-    @ApiModelProperty(value = "已挂品种数")
-    private Integer doneCount;
+    @ApiModelProperty(value = "已挂品种数（两位小数）")
+    private BigDecimal doneCount;
 
-    /** 欠挂品种数 */
+    /** 欠挂品种数（应挂-已挂，服务层按两位小数折出） */
     @TableField("lack_count")
-    @ApiModelProperty(value = "欠挂品种数")
-    private Integer lackCount;
+    @ApiModelProperty(value = "欠挂品种数（两位小数）")
+    private BigDecimal lackCount;
 
     /** 随页交来的标签要件 */
     @TableField("content")
@@ -184,27 +185,27 @@ public class TSaltLinkPage implements Serializable {
         this.scopeRoad = scopeRoad;
     }
 
-    public Integer getShouldCount() {
+    public BigDecimal getShouldCount() {
         return shouldCount;
     }
 
-    public void setShouldCount(Integer shouldCount) {
+    public void setShouldCount(BigDecimal shouldCount) {
         this.shouldCount = shouldCount;
     }
 
-    public Integer getDoneCount() {
+    public BigDecimal getDoneCount() {
         return doneCount;
     }
 
-    public void setDoneCount(Integer doneCount) {
+    public void setDoneCount(BigDecimal doneCount) {
         this.doneCount = doneCount;
     }
 
-    public Integer getLackCount() {
+    public BigDecimal getLackCount() {
         return lackCount;
     }
 
-    public void setLackCount(Integer lackCount) {
+    public void setLackCount(BigDecimal lackCount) {
         this.lackCount = lackCount;
     }
 
