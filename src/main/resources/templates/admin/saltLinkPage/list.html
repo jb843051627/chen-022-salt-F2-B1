@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.pollix.at/thymeleaf/shiro">
+<head>
+    <th:block th:include="include :: header('企业品种挂接名录页')"/>
+    <style>
+        .salt-stat .layui-card-body { padding: 16px 20px; }
+        .salt-stat .num { font-size: 26px; font-weight: 600; line-height: 32px; }
+        .salt-stat .lab { color: #777; margin-top: 4px; }
+    </style>
+</head>
+<body class="pear-container">
+
+<div class="layui-row layui-col-space10">
+    <div class="layui-col-md4 layui-col-sm6">
+        <div class="layui-card salt-stat"><div class="layui-card-body">
+            <div class="num" id="stat-registered">0</div>
+            <div class="lab">在册页数（本层本路）</div>
+        </div></div>
+    </div>
+    <div class="layui-col-md4 layui-col-sm6">
+        <div class="layui-card salt-stat"><div class="layui-card-body">
+            <div class="num" id="stat-done">0</div>
+            <div class="lab">已挂讫</div>
+        </div></div>
+    </div>
+    <div class="layui-col-md4 layui-col-sm6">
+        <div class="layui-card salt-stat"><div class="layui-card-body">
+            <div class="num" id="stat-held">0</div>
+            <div class="lab">压页</div>
+        </div></div>
+    </div>
+</div>
+
+<div class="layui-card">
+    <div class="layui-card-body">
+        <form class="layui-form" action="">
+            <div class="layui-form-item">
+                <label class="layui-form-label">挂接代号</label>
+                <div class="layui-input-inline">
+                    <input type="text" name="billNo" placeholder="整段、半段、咬中几个字都算寻着" class="layui-input">
+                </div>
+                <label class="layui-form-label">企业代号</label>
+                <div class="layui-input-inline">
+                    <input type="text" name="siteNo" placeholder="整段、半段都行" class="layui-input">
+                </div>
+                <label class="layui-form-label">企业类别</label>
+                <div class="layui-input-inline">
+                    <select name="siteType">
+                        <option value="">全类别</option>
+                        <option value="制盐企业">制盐企业</option>
+                        <option value="省内批发企业">省内批发企业</option>
+                        <option value="跨省批发企业">跨省批发企业</option>
+                    </select>
+                </div>
+                <button class="pear-btn pear-btn-md pear-btn-primary" lay-submit lay-filter="page-query">
+                    <i class="layui-icon layui-icon-search"></i> 寻页
+                </button>
+                <button type="reset" class="pear-btn pear-btn-md">
+                    <i class="layui-icon layui-icon-refresh"></i> 重置
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="layui-card">
+    <div class="layui-card-body">
+        <table id="link-page-table" lay-filter="link-page-table"></table>
+    </div>
+</div>
+
+<script type="text/html" id="page-toolbar">
+    <button shiro:hasPermission="salt:saltLinkPage:add" class="pear-btn pear-btn-primary pear-btn-md" lay-event="add">
+        <i class="layui-icon layui-icon-add-1"></i> 起新页
+    </button>
+    <button class="pear-btn pear-btn-md" lay-event="entRegister">
+        <i class="layui-icon layui-icon-list"></i> 企业总名录
+    </button>
+</script>
+
+<script type="text/html" id="page-bar">
+    <button shiro:hasPermission="salt:saltLinkPage:edit" class="pear-btn pear-btn-primary pear-btn-sm" lay-event="edit">
+        <i class="layui-icon layui-icon-edit"></i>
+    </button>
+    <button shiro:hasPermission="salt:saltLinkPage:remove" class="pear-btn pear-btn-danger pear-btn-sm" lay-event="remove">
+        <i class="layui-icon layui-icon-delete"></i>
+    </button>
+</script>
+
+<script type="text/html" id="node-tpl">
+    {{#  if(d.nodeNo === 0){ }}省{{#  } else if(d.nodeNo === 1){ }}市{{#  } else { }}县{{#  } }}
+</script>
+
+<script type="text/html" id="status-tpl">
+    {{#  if(d.status === 1){ }}<span class="pear-text pear-text-success">已挂讫</span>
+    {{#  } else if(d.status === 2){ }}<span class="pear-text pear-text-warning">压页</span>
+    {{#  } else { }}<span class="pear-text">待挂</span>{{#  } }}
+</script>
+
+<th:block th:include="include :: footer"/>
+<script>
+    layui.use(['table', 'form', 'jquery'], function () {
+        let table = layui.table;
+        let form = layui.form;
+        let $ = layui.jquery;
+
+        let MODULE_PATH = rootPath + "/SaltLinkPageController/";
+
+        table.render({
+            elem: '#link-page-table',
+            url: MODULE_PATH + 'list',
+            method: 'get',
+            page: true,
+            skin: 'line',
+            toolbar: '#page-toolbar',
+            limit: 10,
+            cols: [[
+                {title: 'ID', field: 'id', align: 'center', hide: true},
+                {title: '挂接代号', field: 'billNo', align: 'center', width: 190},
+                {title: '企业代号', field: 'siteNo', align: 'center', width: 110},
+                {title: '企业全称', field: 'siteName', align: 'center'},
+                {title: '企业类别', field: 'siteType', align: 'center', width: 130},
+                {title: '挂靠层', field: 'nodeNo', align: 'center', width: 80, templet: '#node-tpl'},
+                {title: '归属地那一路', field: 'scopeRoad', align: 'center', width: 200},
+                {title: '应挂', field: 'shouldCount', align: 'center', width: 70},
+                {title: '已挂', field: 'doneCount', align: 'center', width: 70},
+                // 欠挂只许看不许改：名录页上摆出来，表单里没有它的录入位
+                {title: '欠挂', field: 'lackCount', align: 'center', width: 70},
+                {title: '进展', field: 'status', align: 'center', width: 90, templet: '#status-tpl'},
+                {title: '操作', toolbar: '#page-bar', align: 'center', width: 110}
+            ]],
+            parseData: function (res) {
+                // 三栏与逐页行册同出这一次查询回执，不另起一处点数
+                $('#stat-registered').text(res.registeredCount == null ? 0 : res.registeredCount);
+                $('#stat-done').text(res.doneCount == null ? 0 : res.doneCount);
+                $('#stat-held').text(res.heldCount == null ? 0 : res.heldCount);
+                return {
+                    code: res.code,
+                    msg: res.msg,
+                    count: res.count,
+                    data: res.data
+                };
+            }
+        });
+
+        form.on('submit(page-query)', function (data) {
+            table.reload('link-page-table', {where: data.field, page: {curr: 1}});
+            return false;
+        });
+
+        table.on('tool(link-page-table)', function (obj) {
+            if (obj.event === 'remove') {
+                layer.confirm('确定把这一页沉底？旧页仍可查、仍算在册。', {icon: 3, title: '提示'}, function (index) {
+                    layer.close(index);
+                    let loading = layer.load();
+                    $.ajax({
+                        url: MODULE_PATH + "remove?ids=" + obj.data.id,
+                        dataType: 'json', type: 'delete',
+                        success: function (r) {
+                            layer.close(loading);
+                            layer.msg(r.msg, {icon: r.code === 200 ? 1 : 2, time: 1200}, function () {
+                                if (r.code === 200) table.reload('link-page-table');
+                            });
+                        }
+                    });
+                });
+            } else if (obj.event === 'edit') {
+                layer.open({
+                    type: 2, title: '重挂保存（欠挂系统重算，人手改不了）', shade: 0.1,
+                    area: ['560px', '560px'],
+                    content: MODULE_PATH + 'edit/' + obj.data.id
+                });
+            }
+        });
+
+        table.on('toolbar(link-page-table)', function (obj) {
+            if (obj.event === 'add') {
+                layer.open({
+                    type: 2, title: '起新页（挂接代号、签认码由系统发）', shade: 0.1,
+                    area: ['560px', '560px'],
+                    content: MODULE_PATH + 'add'
+                });
+            } else if (obj.event === 'entRegister') {
+                layer.open({
+                    type: 2, title: '食盐定点企业总名录', shade: 0.1,
+                    area: ['860px', '600px'],
+                    content: MODULE_PATH + 'entView'
+                });
+            }
+        });
+    });
+</script>
+</body>
+</html>

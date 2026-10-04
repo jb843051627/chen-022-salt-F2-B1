@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <th:block th:include="include :: header('食盐定点企业总名录')"/>
+</head>
+<body class="pear-container">
+<div class="layui-card">
+    <div class="layui-card-body">
+        <form class="layui-form" action="">
+            <div class="layui-form-item">
+                <label class="layui-form-label">企业类别</label>
+                <div class="layui-input-inline">
+                    <select name="siteType">
+                        <option value="">全部类别</option>
+                        <option value="制盐企业">制盐企业</option>
+                        <option value="省内批发企业">省内批发企业</option>
+                        <option value="跨省批发企业">跨省批发企业</option>
+                    </select>
+                </div>
+                <button class="pear-btn pear-btn-md pear-btn-primary" lay-submit lay-filter="ent-query">
+                    <i class="layui-icon layui-icon-search"></i> 查询
+                </button>
+                <button type="reset" class="pear-btn pear-btn-md">
+                    <i class="layui-icon layui-icon-refresh"></i> 重置
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<div class="layui-card">
+    <div class="layui-card-body">
+        <table id="ent-table" lay-filter="ent-table"></table>
+    </div>
+</div>
+
+<script type="text/html" id="ent-status-tpl">
+    {{#  if(d.status === 1){ }}<span class="pear-text pear-text-warning">已摘牌（旧页仍在册）</span>
+    {{#  } else { }}<span class="pear-text pear-text-success">在册</span>{{#  } }}
+</script>
+
+<th:block th:include="include :: footer"/>
+<script>
+    layui.use(['table', 'form'], function () {
+        let table = layui.table;
+        let form = layui.form;
+        let MODULE_PATH = rootPath + "/SaltLinkPageController/";
+
+        table.render({
+            elem: '#ent-table',
+            url: MODULE_PATH + 'entList',
+            method: 'get',
+            page: false,
+            skin: 'line',
+            // 服务层已按 制盐企业→省内批发企业→跨省批发企业 的次序排好
+            cols: [[
+                {title: 'ID', field: 'id', align: 'center', hide: true},
+                {title: '企业代号', field: 'siteNo', align: 'center', width: 120},
+                {title: '企业全称', field: 'siteName', align: 'center'},
+                {title: '企业类别', field: 'siteType', align: 'center', width: 150},
+                {title: '属地那一路（省—市—县）', field: 'roadName', align: 'center', width: 240},
+                {title: '名录情形', field: 'status', align: 'center', width: 200, templet: '#ent-status-tpl'}
+            ]],
+            parseData: function (res) {
+                return {code: res.code, msg: res.msg, count: (res.data || []).length, data: res.data};
+            }
+        });
+
+        form.on('submit(ent-query)', function (data) {
+            table.reload('ent-table', {where: data.field});
+            return false;
+        });
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <th:block th:include="include :: header('企业品种挂接簿页起页')"/>
+</head>
+<body>
+<form class="layui-form">
+    <div class="mainBox">
+        <div class="main-container">
+            <div class="layui-form-item">
+                <label class="layui-form-label">所对定点企业</label>
+                <div class="layui-input-block">
+                    <select name="siteId" lay-verify="required" lay-search="" id="siteSelect">
+                        <option value="">请选择总名录上的企业</option>
+                    </select>
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">挂靠那一层</label>
+                <div class="layui-input-block">
+                    <select name="nodeNo" lay-verify="required">
+                        <option value="0">省</option>
+                        <option value="1">市</option>
+                        <option value="2" selected>县</option>
+                    </select>
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">应挂品种数</label>
+                <div class="layui-input-block">
+                    <input type="number" min="0" step="1" name="shouldCount" autocomplete="off"
+                           placeholder="只许填非负整数，空着起不来" class="layui-input">
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">已挂品种数</label>
+                <div class="layui-input-block">
+                    <input type="number" min="0" step="1" name="doneCount" autocomplete="off"
+                           placeholder="只许填非负整数，不得高过应挂" class="layui-input">
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">欠挂品种数</label>
+                <div class="layui-input-block">
+                    <!-- 只许看不许改：这里没有录入位，由系统按 应挂-已挂 折出 -->
+                    <input type="text" class="layui-input" value="起页时由系统折出（应挂−已挂）" disabled>
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">挂接代号</label>
+                <div class="layui-input-block">
+                    <!-- 两处码子归系统发，格子上不给留位置 -->
+                    <input type="text" class="layui-input" value="起页后由系统发给" disabled>
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">随行签认码</label>
+                <div class="layui-input-block">
+                    <input type="text" class="layui-input" value="起页后由系统发给" disabled>
+                </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">备注</label>
+                <div class="layui-input-block">
+                    <textarea name="remark" class="layui-textarea"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="bottom">
+        <div class="button-container">
+            <button type="submit" class="layui-btn layui-btn-normal layui-btn-sm" lay-submit lay-filter="page-save">
+                <i class="layui-icon layui-icon-ok"></i> 提交起页
+            </button>
+            <button type="reset" class="layui-btn layui-btn-primary layui-btn-sm">
+                <i class="layui-icon layui-icon-refresh"></i> 重置
+            </button>
+        </div>
+    </div>
+</form>
+<th:block th:include="include :: footer"/>
+<script>
+    layui.use(['form', 'jquery'], function () {
+        let form = layui.form;
+        let $ = layui.jquery;
+        let MODULE_PATH = rootPath + "/SaltLinkPageController";
+
+        // 拉企业总名录填下拉；摘牌企业不进起页名单
+        $.ajax({
+            url: MODULE_PATH + '/entList', type: 'get', dataType: 'json',
+            success: function (res) {
+                let rows = res.data || [];
+                let html = '<option value="">请选择总名录上的企业</option>';
+                rows.forEach(function (e) {
+                    if (e.status === 1) { return; } // 摘了牌的不再开新页
+                    html += '<option value="' + e.id + '">'
+                        + e.siteNo + '｜' + e.siteName + '｜' + e.siteType
+                        + '｜' + e.roadName + '</option>';
+                });
+                $('#siteSelect').html(html);
+                form.render('select');
+            }
+        });
+
+        form.on('submit(page-save)', function (data) {
+            let f = data.field;
+            if (f.shouldCount === null || f.shouldCount === '') {
+                layer.msg('应挂品种数那一栏空着，页起不来', {icon: 2});
+                return false;
+            }
+            $.ajax({
+                url: MODULE_PATH + '/add',
+                data: f, dataType: 'json', type: 'post',
+                success: function (result) {
+                    if (result.code === 200) {
+                        layer.msg(result.msg, {icon: 1, time: 1200}, function () {
+                            parent.layer.close(parent.layer.getFrameIndex(window.name));
+                            parent.layui.table.reload('link-page-table');
+                        });
+                    } else {
+                        // 回执讲清毛病出在哪一栏
+                        layer.msg(result.msg, {icon: 2, time: 2000});
+                    }
+                }
+            });
+            return false;
+        });
+    });
+</script>
+</body>
+</html>
