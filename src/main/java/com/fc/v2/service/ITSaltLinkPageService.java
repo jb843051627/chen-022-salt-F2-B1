@@ -57,8 +57,35 @@ public interface ITSaltLinkPageService {
      */
     SaltBoardResult openBoard(SaltBoardQuery query, TSysUserView operator);
 
+    /**
+     * 导出名册：与 {@link #openBoard} 同一属地口径、同一套寻页条件，只是不分屏。
+     * 列表筛出哪些，导出就装哪些——两处数目永远对得上。
+     */
+    List<TSaltLinkPage> listBoardRows(SaltBoardQuery query, TSysUserView operator);
+
     /** 企业总名录：一家一行（代号、全称、类别、属地到县），类别按三类固定次序排 */
     List<TSaltEnt> listEntRegister(String siteType);
+
+    /**
+     * 企业总名录停用/恢复（0在册 1已摘牌）。摘牌后不开新页、旧页照旧在册——
+     * 状态归档案管，起页那一头只认这里定下的值。
+     */
+    TSaltEnt changeEntStatus(Long id, Integer status);
+
+    /**
+     * 挂接代号对不对得上档案：在册（未沉底）且有这么一页才算数。
+     * 备案单登一笔、外模块录代号都先过这一关，人手编一个代号进不来。
+     */
+    boolean billNoInRegister(String billNo);
+
+    /**
+     * 跨模块联动：跨省经营备案单缴回封卷时，把对应挂接页的已挂品种数挪一格。
+     * delta 只许 +1（封卷）或 -1（挪回）；应挂品种数一律不碰——应挂归档案，
+     * 领一次就把应挂抬一格的账不在这里生。夹在 0..应挂 之内，欠挂随动，进展随齐没齐翻。
+     *
+     * @return 落库后的挂接页；代号找不着抛 IllegalArgumentException
+     */
+    TSaltLinkPage applyLinkDone(String billNo, int delta);
 
     /** 推进一态（待挂→已挂讫→压页，逐态推进，不得跳态） */
     int advanceTSaltLinkPage(Long id);

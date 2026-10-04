@@ -52,11 +52,25 @@
                         <option value="跨省批发企业">跨省批发企业</option>
                     </select>
                 </div>
+            </div>
+            <div class="layui-form-item">
+                <label class="layui-form-label">挂接进展</label>
+                <div class="layui-input-inline">
+                    <select name="status" id="status-filter">
+                        <option value="">全部进展</option>
+                        <option value="0">待挂</option>
+                        <option value="1">已挂讫</option>
+                        <option value="2">压页</option>
+                    </select>
+                </div>
                 <button class="pear-btn pear-btn-md pear-btn-primary" lay-submit lay-filter="page-query">
                     <i class="layui-icon layui-icon-search"></i> 寻页
                 </button>
                 <button type="reset" class="pear-btn pear-btn-md">
                     <i class="layui-icon layui-icon-refresh"></i> 重置
+                </button>
+                <button type="button" class="pear-btn pear-btn-md" id="btn-export">
+                    <i class="layui-icon layui-icon-export"></i> 导出名册
                 </button>
             </div>
         </form>
@@ -79,6 +93,12 @@
 </script>
 
 <script type="text/html" id="page-bar">
+    <button shiro:hasPermission="salt:saltLinkPage:edit" class="pear-btn pear-btn-primary pear-btn-sm" lay-event="advance" title="推进一态">
+        <i class="layui-icon layui-icon-right"></i>
+    </button>
+    <button shiro:hasPermission="salt:saltLinkPage:edit" class="pear-btn pear-btn-primary pear-btn-sm" lay-event="revert" title="退回一态">
+        <i class="layui-icon layui-icon-left"></i>
+    </button>
     <button shiro:hasPermission="salt:saltLinkPage:edit" class="pear-btn pear-btn-primary pear-btn-sm" lay-event="edit">
         <i class="layui-icon layui-icon-edit"></i>
     </button>
@@ -106,6 +126,10 @@
 
         let MODULE_PATH = rootPath + "/SaltLinkPageController/";
 
+        // 表格当前寻页条件：翻页/换每页条数都要原样带上，
+        // 否则接口收到的只是裸 page/limit，看着像"条数没变"。
+        let queryParams = {};
+
         table.render({
             elem: '#link-page-table',
             url: MODULE_PATH + 'list',
@@ -114,6 +138,7 @@
             skin: 'line',
             toolbar: '#page-toolbar',
             limit: 10,
+            limits: [10, 20, 50, 100],
             cols: [[
                 {title: 'ID', field: 'id', align: 'center', hide: true},
                 {title: '挂接代号', field: 'billNo', align: 'center', width: 190},
@@ -127,7 +152,8 @@
                 // 欠挂只许看不许改：名录页上摆出来，表单里没有它的录入位
                 {title: '欠挂', field: 'lackCount', align: 'center', width: 70},
                 {title: '进展', field: 'status', align: 'center', width: 90, templet: '#status-tpl'},
-                {title: '操作', toolbar: '#page-bar', align: 'center', width: 110}
+                {title: '开页人', field: 'createBy', align: 'center', width: 110},
+                {title: '操作', toolbar: '#page-bar', align: 'center', width: 170}
             ]],
             parseData: function (res) {
                 // 三栏与逐页行册同出这一次查询回执，不另起一处点数
@@ -143,21 +169,62 @@
             }
         });
 
+        function collectFields(f) {
+            // 四个字段原样带上（空着就是空串）：reload 会合并 where，
+            // 缺省会把上一次的筛选留下，造成"重置/改筛不起作用"
+            let p = {};
+            ['billNo', 'siteNo', 'siteType', 'status'].forEach(function (k) {
+                p[k] = f[k] == null ? '' : f[k];
+            });
+            return p;
+        }
+
         form.on('submit(page-query)', function (data) {
-            table.reload('link-page-table', {where: data.field, page: {curr: 1}});
+            queryParams = collectFields(data.field);
+            table.reload('link-page-table', {
+                where: $.extend({}, queryParams),
+                page: {curr: 1}
+            });
             return false;
         });
+
+        // 重置：四个寻页字段显式置空（压住 reload 的合并），回到第一页全量
+        $('.layui-form button[type="reset"]').on('click', function () {
+            queryParams = {billNo: '', siteNo: '', siteType: '', status: ''};
+            table.reload('link-page-table', {where: queryParams, page: {curr: 1}});
+        });
+
+        // 导出与列表同一口径：带上当前寻页条件，由服务端不分屏舀同一勺
+        $('#btn-export').on('click', function () {
+            let qs = $.param(queryParams);
+            window.location.href = MODULE_PATH + 'export' + (qs ? '?' + qs : '');
+        });
+
+        function postAction(url, id, okTip, done) {
+            let loading = layer.load();
+            $.ajax({
+                url: MODULE_PATH + url,
+                data: {id: id},
+                dataType: 'json',
+                type: 'post',
+                success: function (r) {
+                    layer.close(loading);
+                    layer.msg(r.msg, {icon: r.code === 200 ? 1 : 2, time: 1200}, function () {
+                        if (r.code === 200) table.reload('link-page-table');
+                        if (done) done(r.code === 200);
+                    });
+                }
+            });
+        }
 
         table.on('tool(link-page-table)', function (obj) {
             if (obj.event === 'remove') {
                 layer.confirm('确定把这一页沉底？旧页仍可查、仍算在册。', {icon: 3, title: '提示'}, function (index) {
                     layer.close(index);
-                    let loading = layer.load();
                     $.ajax({
                         url: MODULE_PATH + "remove?ids=" + obj.data.id,
                         dataType: 'json', type: 'delete',
                         success: function (r) {
-                            layer.close(loading);
                             layer.msg(r.msg, {icon: r.code === 200 ? 1 : 2, time: 1200}, function () {
                                 if (r.code === 200) table.reload('link-page-table');
                             });
@@ -167,9 +234,21 @@
             } else if (obj.event === 'edit') {
                 layer.open({
                     type: 2, title: '重挂保存（欠挂系统重算，人手改不了）', shade: 0.1,
-                    area: ['560px', '560px'],
+                    area: ['560px', '600px'],
                     content: MODULE_PATH + 'edit/' + obj.data.id
                 });
+            } else if (obj.event === 'advance') {
+                if (obj.data.status === 2) {
+                    layer.msg('已在压页，不能再推', {icon: 2});
+                    return;
+                }
+                postAction('advance', obj.data.id);
+            } else if (obj.event === 'revert') {
+                if (obj.data.status === 0) {
+                    layer.msg('还在待挂，无处可退', {icon: 2});
+                    return;
+                }
+                postAction('revert', obj.data.id);
             }
         });
 
@@ -177,7 +256,7 @@
             if (obj.event === 'add') {
                 layer.open({
                     type: 2, title: '起新页（挂接代号、签认码由系统发）', shade: 0.1,
-                    area: ['560px', '560px'],
+                    area: ['560px', '600px'],
                     content: MODULE_PATH + 'add'
                 });
             } else if (obj.event === 'entRegister') {

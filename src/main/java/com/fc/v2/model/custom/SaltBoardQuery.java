@@ -26,6 +26,9 @@ public class SaltBoardQuery implements Serializable {
     /** 企业类别（模糊） */
     private String siteType;
 
+    /** 挂接进展 0待挂 1已挂讫 2压页（不给=不筛） */
+    private Integer status;
+
     public int getPage() {
         return page;
     }
@@ -64,5 +67,13 @@ public class SaltBoardQuery implements Serializable {
 
     public void setSiteType(String siteType) {
         this.siteType = siteType;
+    }
+
+    public Integer getStatus() {
+        return status;
+    }
+
+    public void setStatus(Integer status) {
+        this.status = status;
     }
 }

@@ -7,6 +7,7 @@ import com.fc.v2.common.domain.ResultTable;
 import com.fc.v2.common.log.Log;
 import com.fc.v2.model.auto.TSaltRecordFlow;
 import com.fc.v2.service.ITSaltRecordFlowService;
+import com.fc.v2.util.StringUtils;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
@@ -44,11 +45,39 @@ public class SaltRecordFlowController extends BaseController {
     @RequiresPermissions("saltRecordFlow:list")
     @ResponseBody
     public ResultTable list(TSaltRecordFlow record) {
-        QueryWrapper<TSaltRecordFlow> queryWrapper = new QueryWrapper<TSaltRecordFlow>();
+        // 寻页条件：备案单代号（咬中字即可）、走到的步次、当前档口；不筛就全量在册
+        QueryWrapper<TSaltRecordFlow> queryWrapper = new QueryWrapper<TSaltRecordFlow>()
+                .eq("del_flag", 0);
+        if (record != null) {
+            if (StringUtils.isNotEmpty(record.getBizNo())) {
+                queryWrapper.like("biz_no", record.getBizNo().trim());
+            }
+            if (record.getStatus() != null) {
+                queryWrapper.eq("status", record.getStatus());
+            }
+            if (record.getStage() != null) {
+                queryWrapper.eq("stage", record.getStage());
+            }
+        }
+        queryWrapper.orderByDesc("create_time").orderByDesc("id");
         startPage();
         com.github.pagehelper.PageInfo<TSaltRecordFlow> page =
                 new com.github.pagehelper.PageInfo<TSaltRecordFlow>(saltRecordFlowService.selectTSaltRecordFlowList(queryWrapper));
         return pageTable(page.getList(), page.getTotal());
+    }
+
+    @Log(title = "跨省经营备案单登单", action = "register")
+    @ApiOperation(value = "登一笔", notes = "挂接代号对档案，从受理档走起")
+    @PostMapping("/register")
+    @RequiresPermissions("saltRecordFlow:advance")
+    @ResponseBody
+    public AjaxResult register(String bizNo) {
+        try {
+            saltRecordFlowService.register(bizNo);
+        } catch (IllegalArgumentException e) {
+            return AjaxResult.error(e.getMessage());
+        }
+        return AjaxResult.success("已登一笔");
     }
 
     @Log(title = "跨省经营备案单推进", action = "advance")
@@ -57,7 +86,8 @@ public class SaltRecordFlowController extends BaseController {
     @RequiresPermissions("saltRecordFlow:advance")
     @ResponseBody
     public AjaxResult advance(Long id, String remark) {
-        return toAjax(saltRecordFlowService.advance(id, remark) != null ? 1 : 0);
+        return saltRecordFlowService.advance(id, remark) != null
+                ? AjaxResult.success("已推进一档") : AjaxResult.error("已封卷或已到顶，不能再推");
     }
 
     @Log(title = "跨省经营备案单回退", action = "rollback")
@@ -66,6 +96,7 @@ public class SaltRecordFlowController extends BaseController {
     @RequiresPermissions("saltRecordFlow:rollback")
     @ResponseBody
     public AjaxResult rollback(Long id, String remark) {
-        return toAjax(saltRecordFlowService.rollback(id, remark) != null ? 1 : 0);
+        return saltRecordFlowService.rollback(id, remark) != null
+                ? AjaxResult.success("已退回一档") : AjaxResult.error("还在头一档，无处可退");
     }
 }

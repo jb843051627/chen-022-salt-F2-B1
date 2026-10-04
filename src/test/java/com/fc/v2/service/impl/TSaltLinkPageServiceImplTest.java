@@ -1,6 +1,7 @@
 package com.fc.v2.service.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -289,6 +290,24 @@ public class TSaltLinkPageServiceImplTest {
         assertEquals(10, board.getRows().size());     // 屏上只摆第二屏十条
     }
 
+    @Test
+    public void board_pageSizeChange_isHonored() {
+        List<TSaltLinkPage> scoop = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            scoop.add(page("GJ-S" + i, 10, 1, 9, 0, "盐岭省—盐泽市—临卤县"));
+        }
+        when(pageMapper.selectList(any())).thenReturn(scoop);
+
+        SaltBoardQuery q = new SaltBoardQuery();
+        q.setPage(1);
+        q.setLimit(20); // 界面上把每页条数改成 20
+        SaltBoardResult board = service.openBoard(q,
+                new TSysUserView("盐岭省—盐泽市—临卤县", 2));
+
+        assertEquals(20, board.getRows().size(), "接口必须按新条数吐 20 行，不能照旧 10 行");
+        assertEquals(25, board.getTotal());
+    }
+
     // ---------- 进展推进/退回守边界，签认码不清 ----------
 
     @Test
@@ -324,6 +343,156 @@ public class TSaltLinkPageServiceImplTest {
         // 部分更新不带签认码、不带删除标记：库里的 QR11 不动，旧页照旧在册
         assertNull(cap.getValue().getSignCode());
         assertNull(cap.getValue().getDelFlag());
+    }
+
+    // ---------- 名录页进展筛选 ----------
+
+    @Test
+    public void board_statusFilter_pinsStatus() {
+        when(pageMapper.selectList(any())).thenReturn(new ArrayList<TSaltLinkPage>());
+
+        SaltBoardQuery q = new SaltBoardQuery();
+        q.setStatus(1); // 只看已挂讫
+        service.openBoard(q, new TSysUserView("盐岭省—盐泽市—临卤县", 2));
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TSaltLinkPage>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.QueryWrapper.class);
+        verify(pageMapper).selectList(cap.capture());
+        String sql = cap.getValue().getTargetSql().toLowerCase();
+        assertTrue(sql.contains("status = ?"), sql);
+        assertTrue(cap.getValue().getParamNameValuePairs().containsValue(1));
+    }
+
+    @Test
+    public void board_statusFilter_illegalValueIgnored() {
+        when(pageMapper.selectList(any())).thenReturn(new ArrayList<TSaltLinkPage>());
+        SaltBoardQuery q = new SaltBoardQuery();
+        q.setStatus(9); // 越界值不当筛选条件
+        service.openBoard(q, new TSysUserView("盐岭省—盐泽市—临卤县", 2));
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TSaltLinkPage>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.QueryWrapper.class);
+        verify(pageMapper).selectList(cap.capture());
+        assertFalse(cap.getValue().getTargetSql().toLowerCase().contains("status = ?"));
+    }
+
+    // ---------- 列表与导出同一勺 ----------
+
+    @Test
+    public void export_sharesScoopWithBoard() {
+        when(pageMapper.selectList(any())).thenReturn(new ArrayList<TSaltLinkPage>());
+
+        SaltBoardQuery q = new SaltBoardQuery();
+        q.setBillNo("GJ-9");
+        q.setStatus(2);
+        TSysUserView op = new TSysUserView("盐岭省—盐泽市—临卤县", 2);
+
+        service.openBoard(q, op);
+        service.listBoardRows(q, op);
+
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<TSaltLinkPage>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.QueryWrapper.class);
+        verify(pageMapper, org.mockito.Mockito.times(2)).selectList(cap.capture());
+        String listSql = cap.getAllValues().get(0).getTargetSql();
+        String exportSql = cap.getAllValues().get(1).getTargetSql();
+        // 列表与导出长出同一套条件，数目不会对不上
+        assertEquals(listSql, exportSql);
+    }
+
+    // ---------- 名录停用/恢复 ----------
+
+    @Test
+    public void changeEntStatus_delist_thenResume() {
+        when(entMapper.selectById(5L)).thenReturn(ent(5L, "JY5", 0));
+        TSaltEnt e = service.changeEntStatus(5L, 1);
+        assertEquals(1, e.getStatus().intValue());
+        verify(entMapper).updateById(any());
+
+        when(entMapper.selectById(5L)).thenReturn(ent(5L, "JY5", 1));
+        assertEquals(0, service.changeEntStatus(5L, 0).getStatus().intValue());
+    }
+
+    @Test
+    public void changeEntStatus_rejectsBadStatusAndMissing() {
+        assertThrows(IllegalArgumentException.class, () -> service.changeEntStatus(5L, 9));
+        when(entMapper.selectById(6L)).thenReturn(null);
+        assertThrows(IllegalArgumentException.class, () -> service.changeEntStatus(6L, 1));
+    }
+
+    // ---------- 跨模块联动：只动已挂，不碰应挂 ----------
+
+    @Test
+    public void applyLinkDone_movesDoneOnly_notShould() {
+        TSaltLinkPage p = persistedPage(300L, "GJ20", "QR20", 10, 4, 6, 2,
+                "盐岭省—盐泽市—临卤县", 0);
+        when(pageMapper.selectOne(any())).thenReturn(p);
+        when(pageMapper.selectById(300L)).thenReturn(p);
+
+        TSaltLinkPage out = service.applyLinkDone("GJ20", 1);
+
+        assertEquals(10, out.getShouldCount().intValue(), "领一次不应把应挂抬一格");
+        ArgumentCaptor<TSaltLinkPage> cap = ArgumentCaptor.forClass(TSaltLinkPage.class);
+        verify(pageMapper).updateById(cap.capture());
+        assertEquals(5, cap.getValue().getDoneCount().intValue());
+        assertEquals(5, cap.getValue().getLackCount().intValue());
+        assertNull(cap.getValue().getShouldCount(), "应挂列不进更新语句");
+    }
+
+    @Test
+    public void applyLinkDone_fullDone_setsStatusDone() {
+        TSaltLinkPage p = persistedPage(301L, "GJ21", "QR21", 5, 4, 1, 2,
+                "盐岭省—盐泽市—临卤县", 0);
+        when(pageMapper.selectOne(any())).thenReturn(p);
+        when(pageMapper.selectById(301L)).thenReturn(p);
+        service.applyLinkDone("GJ21", 1);
+        ArgumentCaptor<TSaltLinkPage> cap = ArgumentCaptor.forClass(TSaltLinkPage.class);
+        verify(pageMapper).updateById(cap.capture());
+        assertEquals(5, cap.getValue().getDoneCount().intValue());
+        assertEquals(0, cap.getValue().getLackCount().intValue());
+        assertEquals(1, cap.getValue().getStatus().intValue()); // 挂齐→已挂讫
+    }
+
+    @Test
+    public void applyLinkDone_clampsBounds() {
+        TSaltLinkPage full = persistedPage(302L, "GJ22", "QR22", 5, 5, 0, 2,
+                "盐岭省—盐泽市—临卤县", 1);
+        when(pageMapper.selectOne(any())).thenReturn(full);
+        assertThrows(IllegalArgumentException.class, () -> service.applyLinkDone("GJ22", 1));
+
+        TSaltLinkPage zero = persistedPage(303L, "GJ23", "QR23", 5, 0, 5, 2,
+                "盐岭省—盐泽市—临卤县", 0);
+        when(pageMapper.selectOne(any())).thenReturn(zero);
+        assertThrows(IllegalArgumentException.class, () -> service.applyLinkDone("GJ23", -1));
+
+        when(pageMapper.selectOne(any())).thenReturn(null);
+        assertThrows(IllegalArgumentException.class, () -> service.applyLinkDone("NOPE", 1));
+        verify(pageMapper, never()).updateById(any());
+    }
+
+    @Test
+    public void billNoInRegister_checksArchive() {
+        when(pageMapper.selectCount(any())).thenReturn(1);
+        assertTrue(service.billNoInRegister("GJ1"));
+        when(pageMapper.selectCount(any())).thenReturn(0);
+        assertFalse(service.billNoInRegister("FAKE"));
+        assertFalse(service.billNoInRegister(""));
+    }
+
+    // ---------- 起页署名：表单塞 createBy 不认，落登录人 ----------
+
+    @Test
+    public void openLinkPage_handedCreateBy_cleared() {
+        TSaltLinkPage r = new TSaltLinkPage();
+        r.setSiteId(0);
+        r.setNodeNo(2);
+        r.setShouldCount(10);
+        r.setDoneCount(3);
+        r.setCreateBy("表单里塞进来的别人");
+
+        service.openLinkPage(r);
+
+        ArgumentCaptor<TSaltLinkPage> cap = ArgumentCaptor.forClass(TSaltLinkPage.class);
+        verify(pageMapper).insert(cap.capture());
+        assertNull(cap.getValue().getCreateBy(), "开页人归登录人，人手塞的值抹掉交填充器");
     }
 
     // ---------- 企业总名录类别排序 ----------
@@ -380,5 +549,17 @@ public class TSaltLinkPageServiceImplTest {
     private TSaltLinkPage page(String billNo, int should, int done, int lack, int status, String road) {
         return persistedPage((long) billNo.hashCode(), billNo, "QR" + billNo,
                 should, done, lack, 2, road, status);
+    }
+
+    private TSaltEnt ent(Long id, String siteNo, int status) {
+        TSaltEnt e = new TSaltEnt();
+        e.setId(id);
+        e.setSiteNo(siteNo);
+        e.setSiteName("企业" + siteNo);
+        e.setSiteType("制盐企业");
+        e.setRoadName("盐岭省—盐泽市—临卤县");
+        e.setStatus(status);
+        e.setDelFlag(0);
+        return e;
     }
 }

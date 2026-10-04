@@ -2,7 +2,6 @@ package com.fc.v2.service.impl;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 
@@ -109,6 +108,9 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         // 两处码子归系统发：人手写一个递上来不收，当场抹掉重发
         record.setBillNo(issueBillNo());
         record.setSignCode(issueSignCode());
+        // 开页人归登录人：表单里即便塞了 createBy 也不认，抹掉交给填充器落登录名
+        record.setCreateBy(null);
+        record.setUpdateBy(null);
         record.setSiteNo(ent.getSiteNo());
         record.setScopeRoad(pressRoad(ent.getRoadName(), nodeNo));
         record.setNodeNo(nodeNo);
@@ -188,40 +190,12 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         if (operator == null || StringUtils.isEmpty(operator.getDeptName())) {
             throw new IllegalArgumentException("操作人没有属地，名录页开不了");
         }
+        result.setScopeRoad(operator.getDeptName());
 
-        int level = operator.getLevel();
-        String scopeRoad = operator.getDeptName();
-        result.setScopeRoad(scopeRoad);
-
-        QueryWrapper<TSaltLinkPage> w = new QueryWrapper<TSaltLinkPage>()
-                .eq("del_flag", 0)
-                // 页压在属地那一层底下：只露压在本层的页
-                .eq("node_no", level)
-                .eq("scope_road", scopeRoad);
-
-        if (query != null) {
-            if (StringUtils.isNotEmpty(query.getBillNo())) {
-                w.like("bill_no", query.getBillNo().trim());
-            }
-            if (StringUtils.isNotEmpty(query.getSiteNo())) {
-                w.like("site_no", query.getSiteNo().trim());
-            }
-            if (StringUtils.isNotEmpty(query.getSiteType())) {
-                // 企业类别在企业总名录上：先按类别（咬中几个字也算）圈出企业代号
-                List<String> siteNos = siteNosByTypeLike(query.getSiteType().trim());
-                if (siteNos.isEmpty()) {
-                    result.setRows(Collections.<TSaltLinkPage>emptyList());
-                    result.setTotal(0L);
-                    return result;
-                }
-                w.in("site_no", siteNos);
-            }
-        }
-        w.orderByDesc("create_time").orderByDesc("id");
-
-        // 同一次算：一次查出这批页，三栏就这批行点数，行册再从这批行里切一屏。
-        // 不另查一次总数，更不拿旁处的行凑数。
-        List<TSaltLinkPage> all = this.baseMapper.selectList(w);
+        // 行册与三栏同一勺：同一属地口径、同一套寻页条件一次捞回，
+        // 三栏就这批行点数，行册再从这批行里切一屏。
+        // 导出（listBoardRows）走同一个 scoopPages，不会长出第二种数。
+        List<TSaltLinkPage> all = scoopPages(query, operator);
 
         int registered = 0;
         int done = 0;
@@ -249,6 +223,51 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
         result.setDoneCount(done);
         result.setHeldCount(held);
         return result;
+    }
+
+    /**
+     * 导出名册：与名录页列表同一个 scoopPages——列表筛出哪些页，
+     * 导出就装哪些页（含企业全称、类别一并补上），只是不分屏。
+     */
+    @Override
+    public List<TSaltLinkPage> listBoardRows(SaltBoardQuery query, TSysUserView operator) {
+        List<TSaltLinkPage> rows = scoopPages(query, operator);
+        fillEntInfo(rows);
+        return rows;
+    }
+
+    /**
+     * 名录页行册的唯一来路：属地（del_flag/node_no/scope_road）钉死本层本路，
+     * 再叠寻页条件（挂接代号/企业代号/进展/企业类别）。列表与导出都从这里舀。
+     */
+    private List<TSaltLinkPage> scoopPages(SaltBoardQuery query, TSysUserView operator) {
+        QueryWrapper<TSaltLinkPage> w = new QueryWrapper<TSaltLinkPage>()
+                .eq("del_flag", 0)
+                .eq("node_no", operator.getLevel())
+                .eq("scope_road", operator.getDeptName());
+
+        if (query != null) {
+            if (StringUtils.isNotEmpty(query.getBillNo())) {
+                w.like("bill_no", query.getBillNo().trim());
+            }
+            if (StringUtils.isNotEmpty(query.getSiteNo())) {
+                w.like("site_no", query.getSiteNo().trim());
+            }
+            if (query.getStatus() != null
+                    && query.getStatus() >= STATUS_PENDING && query.getStatus() <= STATUS_HELD) {
+                w.eq("status", query.getStatus());
+            }
+            if (StringUtils.isNotEmpty(query.getSiteType())) {
+                // 企业类别在企业总名录上：先按类别（咬中几个字也算）圈出企业代号
+                List<String> siteNos = siteNosByTypeLike(query.getSiteType().trim());
+                if (siteNos.isEmpty()) {
+                    return new ArrayList<TSaltLinkPage>();
+                }
+                w.in("site_no", siteNos);
+            }
+        }
+        w.orderByDesc("create_time").orderByDesc("id");
+        return this.baseMapper.selectList(w);
     }
 
     /** 给本屏逐页补上企业全称、类别（批量查一次总名录；摘牌企业也照补，旧页照旧在册） */
@@ -292,6 +311,73 @@ public class TSaltLinkPageServiceImpl extends ServiceImpl<TSaltLinkPageMapper, T
                 + "'" + SITE_TYPE_ORDER.get(1) + "',"
                 + "'" + SITE_TYPE_ORDER.get(2) + "'), road_name, site_no");
         return saltEntMapper.selectList(w);
+    }
+
+    @Override
+    public TSaltEnt changeEntStatus(Long id, Integer status) {
+        if (id == null) {
+            throw new IllegalArgumentException("没点名是名录上哪一家");
+        }
+        if (status == null || (status != 0 && status != 1)) {
+            throw new IllegalArgumentException("名录情形只许 0在册 / 1已摘牌");
+        }
+        TSaltEnt ent = saltEntMapper.selectById(id);
+        if (ent == null || (ent.getDelFlag() != null && ent.getDelFlag() == 1)) {
+            throw new IllegalArgumentException("这一家在总名录上找不着");
+        }
+        TSaltEnt update = new TSaltEnt();
+        update.setId(id);
+        update.setStatus(status);
+        update.setUpdateTime(new Date());
+        saltEntMapper.updateById(update);
+        ent.setStatus(status);
+        return ent;
+    }
+
+    @Override
+    public boolean billNoInRegister(String billNo) {
+        if (StringUtils.isEmpty(billNo)) {
+            return false;
+        }
+        Integer cnt = this.baseMapper.selectCount(new QueryWrapper<TSaltLinkPage>()
+                .eq("bill_no", billNo.trim()).eq("del_flag", 0));
+        return cnt != null && cnt > 0;
+    }
+
+    @Override
+    public TSaltLinkPage applyLinkDone(String billNo, int delta) {
+        if (StringUtils.isEmpty(billNo) || (delta != 1 && delta != -1)) {
+            throw new IllegalArgumentException("联动只认封卷(+1)或挪回(-1)");
+        }
+        TSaltLinkPage page = this.baseMapper.selectOne(new QueryWrapper<TSaltLinkPage>()
+                .eq("bill_no", billNo).eq("del_flag", 0));
+        if (page == null) {
+            throw new IllegalArgumentException("挂接代号 " + billNo + " 在挂接簿上找不着");
+        }
+        int should = requireShould(page.getShouldCount());
+        int done = normalizeDone(page.getDoneCount());
+        int next = done + delta;
+        if (next < 0 || next > should) {
+            throw new IllegalArgumentException(
+                    "已挂品种数(" + next + ")越出应挂(" + should + ")的界，这一笔联动落不下");
+        }
+        // 只动已挂与欠挂、随齐没齐翻进展；应挂品种数不碰——领单子不抬应挂。
+        Integer nextStatus;
+        if (next >= should) {
+            nextStatus = STATUS_DONE;                 // 封卷把最后一格补齐 → 已挂讫
+        } else if (delta == -1 && done >= should) {
+            nextStatus = STATUS_PENDING;             // 挪回把已挂讫拆回 → 待挂，可逆
+        } else {
+            nextStatus = page.getStatus() == null ? STATUS_PENDING : page.getStatus();
+        }
+        TSaltLinkPage update = new TSaltLinkPage();
+        update.setId(page.getId());
+        update.setDoneCount(next);
+        update.setLackCount(should - next);
+        update.setStatus(nextStatus);
+        update.setUpdateTime(new Date());
+        this.baseMapper.updateById(update);
+        return this.baseMapper.selectById(page.getId());
     }
 
     // ------------------------------------------------------------------

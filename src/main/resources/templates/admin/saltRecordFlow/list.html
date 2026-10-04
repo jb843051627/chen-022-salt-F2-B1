@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.pollix.at/thymeleaf/shiro">
+<head>
+    <th:block th:include="include :: header('跨省经营备案单流转台账')"/>
+</head>
+<body class="pear-container">
+
+<div class="layui-card">
+    <div class="layui-card-body">
+        <form class="layui-form" action="">
+            <div class="layui-form-item">
+                <label class="layui-form-label">备案单代号</label>
+                <div class="layui-input-inline">
+                    <input type="text" name="bizNo" placeholder="即挂接代号，咬中字即可" class="layui-input">
+                </div>
+                <label class="layui-form-label">当前步次</label>
+                <div class="layui-input-inline">
+                    <select name="stage">
+                        <option value="">全部步次</option>
+                        <option value="0">递单受理</option>
+                        <option value="1">材料核验</option>
+                        <option value="2">生效确认</option>
+                        <option value="3">缴回封卷</option>
+                    </select>
+                </div>
+                <label class="layui-form-label">情形</label>
+                <div class="layui-input-inline">
+                    <select name="status">
+                        <option value="">全部</option>
+                        <option value="0">未起</option>
+                        <option value="1">在办</option>
+                        <option value="2">已封卷</option>
+                    </select>
+                </div>
+                <button class="pear-btn pear-btn-md pear-btn-primary" lay-submit lay-filter="flow-query">
+                    <i class="layui-icon layui-icon-search"></i> 查询
+                </button>
+                <button type="reset" class="pear-btn pear-btn-md">
+                    <i class="layui-icon layui-icon-refresh"></i> 重置
+                </button>
+                <button type="button" class="pear-btn pear-btn-md pear-btn-primary" id="btn-register">
+                    <i class="layui-icon layui-icon-add-1"></i> 登一笔
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="layui-card">
+    <div class="layui-card-body">
+        <table id="flow-table" lay-filter="flow-table"></table>
+    </div>
+</div>
+
+<script type="text/html" id="flow-bar">
+    <button shiro:hasPermission="saltRecordFlow:advance" class="pear-btn pear-btn-primary pear-btn-sm" lay-event="advance" title="推进一档">
+        <i class="layui-icon layui-icon-right"></i>
+    </button>
+    <button shiro:hasPermission="saltRecordFlow:rollback" class="pear-btn pear-btn-primary pear-btn-sm" lay-event="rollback" title="退回一档">
+        <i class="layui-icon layui-icon-left"></i>
+    </button>
+</script>
+
+<script type="text/html" id="stage-tpl">
+    {{#  if(d.stage === 0){ }}递单受理
+    {{#  } else if(d.stage === 1){ }}材料核验
+    {{#  } else if(d.stage === 2){ }}生效确认
+    {{#  } else if(d.stage === 3){ }}缴回封卷
+    {{#  } else { }}{{ d.stage }}{{#  } }}
+</script>
+
+<script type="text/html" id="flow-status-tpl">
+    {{#  if(d.status === 2){ }}<span class="pear-text pear-text-success">已封卷</span>
+    {{#  } else if(d.status === 1){ }}<span class="pear-text">在办</span>
+    {{#  } else { }}<span class="pear-text pear-text-warning">未起</span>{{#  } }}
+</script>
+
+<th:block th:include="include :: footer"/>
+<script>
+    layui.use(['table', 'form', 'jquery'], function () {
+        let table = layui.table;
+        let form = layui.form;
+        let $ = layui.jquery;
+
+        let MODULE_PATH = rootPath + "/saltRecordFlow/";
+
+        table.render({
+            elem: '#flow-table',
+            url: MODULE_PATH + 'list',
+            method: 'get',
+            page: true,
+            skin: 'line',
+            limit: 10,
+            limits: [10, 20, 50, 100],
+            cols: [[
+                {title: 'ID', field: 'id', align: 'center', hide: true},
+                {title: '备案单代号（挂接代号）', field: 'bizNo', align: 'center', width: 220},
+                {title: '当前步次', field: 'stage', align: 'center', width: 120, templet: '#stage-tpl'},
+                {title: '情形', field: 'status', align: 'center', width: 100, templet: '#flow-status-tpl'},
+                {title: '一段一记', field: 'content', align: 'center'},
+                {title: '最近动作', field: 'lastAction', align: 'center', width: 120},
+                {title: '开单人', field: 'createBy', align: 'center', width: 110},
+                {title: '开单时间', field: 'createTime', align: 'center', width: 170},
+                {title: '操作', toolbar: '#flow-bar', align: 'center', width: 110}
+            ]]
+        });
+
+        form.on('submit(flow-query)', function (data) {
+            // 三个字段显式带上（含空串），压住 reload 对 where 的合并，否则旧筛选残留
+            let f = {
+                bizNo: data.field.bizNo || '',
+                stage: data.field.stage || '',
+                status: data.field.status || ''
+            };
+            table.reload('flow-table', {where: f, page: {curr: 1}});
+            return false;
+        });
+
+        $('#btn-register').on('click', function () {
+            layer.prompt({title: '按挂接代号登一笔备案单', formType: 0}, function (val, index) {
+                $.ajax({
+                    url: MODULE_PATH + 'register',
+                    data: {bizNo: val}, dataType: 'json', type: 'post',
+                    success: function (r) {
+                        layer.msg(r.msg, {icon: r.code === 200 ? 1 : 2, time: 1500}, function () {
+                            if (r.code === 200) {
+                                layer.close(index);
+                                table.reload('flow-table');
+                            }
+                        });
+                    }
+                });
+            });
+        });
+
+        function postAction(url, id) {
+            $.ajax({
+                url: MODULE_PATH + url,
+                data: {id: id}, dataType: 'json', type: 'post',
+                success: function (r) {
+                    layer.msg(r.msg, {icon: r.code === 200 ? 1 : 2, time: 1200}, function () {
+                        if (r.code === 200) table.reload('flow-table');
+                    });
+                }
+            });
+        }
+
+        table.on('tool(flow-table)', function (obj) {
+            if (obj.event === 'advance') {
+                if (obj.data.status === 2) { layer.msg('已封卷，不能再推', {icon: 2}); return; }
+                postAction('advance', obj.data.id);
+            } else if (obj.event === 'rollback') {
+                if (obj.data.stage === 0) { layer.msg('还在头一档，无处可退', {icon: 2}); return; }
+                postAction('rollback', obj.data.id);
+            }
+        });
+    });
+</script>
+</body>
+</html>

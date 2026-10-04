@@ -1,10 +1,16 @@
 package com.fc.v2.controller.admin;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
 
+import javax.servlet.http.HttpServletResponse;
+
 import com.fc.v2.common.base.BaseController;
 import com.fc.v2.common.domain.AjaxResult;
+import com.fc.v2.common.log.Log;
 import com.fc.v2.model.auto.TSysDepartment;
 import com.fc.v2.model.auto.TSysUser;
 import com.fc.v2.model.custom.SaltBoardQuery;
@@ -69,13 +75,15 @@ public class SaltLinkPageController extends BaseController {
                            @RequestParam(value = "limit", defaultValue = "10") int limit,
                            @RequestParam(value = "billNo", required = false) String billNo,
                            @RequestParam(value = "siteNo", required = false) String siteNo,
-                           @RequestParam(value = "siteType", required = false) String siteType) {
+                           @RequestParam(value = "siteType", required = false) String siteType,
+                           @RequestParam(value = "status", required = false) Integer status) {
         SaltBoardQuery query = new SaltBoardQuery();
         query.setPage(page);
         query.setLimit(limit);
         query.setBillNo(billNo);
         query.setSiteNo(siteNo);
         query.setSiteType(siteType);
+        query.setStatus(status);
 
         SaltBoardResult board;
         try {
@@ -93,6 +101,103 @@ public class SaltLinkPageController extends BaseController {
         json.put("heldCount", board.getHeldCount());
         json.put("scopeRoad", board.getScopeRoad());
         return json;
+    }
+
+    /**
+     * 导出名册（CSV，带 BOM 供 Excel 直开）：与列表同一勺——
+     * 同样的属地口径、同样的寻页条件，只是不分屏。列表数和导出数永远对得上。
+     * 应挂/已挂/欠挂三列按档案整数口径出，不带小数位。
+     */
+    @ApiOperation(value = "名录页导出", notes = "与列表同口径，不分屏")
+    @GetMapping("/export")
+    @RequiresPermissions("salt:saltLinkPage:list")
+    @Log(title = "企业品种挂接名录页", action = "export")
+    public void export(@RequestParam(value = "billNo", required = false) String billNo,
+                       @RequestParam(value = "siteNo", required = false) String siteNo,
+                       @RequestParam(value = "siteType", required = false) String siteType,
+                       @RequestParam(value = "status", required = false) Integer status,
+                       HttpServletResponse response) throws IOException {
+        SaltBoardQuery query = new SaltBoardQuery();
+        query.setBillNo(billNo);
+        query.setSiteNo(siteNo);
+        query.setSiteType(siteType);
+        query.setStatus(status);
+
+        List<TSaltLinkPage> rows;
+        try {
+            rows = saltLinkPageService.listBoardRows(query, currentOperator());
+        } catch (IllegalArgumentException e) {
+            response.setContentType("text/plain;charset=UTF-8");
+            response.getWriter().write(e.getMessage());
+            return;
+        }
+
+        response.setContentType("text/csv;charset=UTF-8");
+        response.setHeader("Content-Disposition",
+                "attachment;filename=" + URLEncoder.encode("企业品种挂接名录.csv", "UTF-8"));
+        OutputStream out = response.getOutputStream();
+        out.write(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}); // UTF-8 BOM
+        StringBuilder sb = new StringBuilder();
+        sb.append("挂接代号,企业代号,企业全称,企业类别,挂靠层,归属地那一路,应挂品种数,已挂品种数,欠挂品种数,进展,开页人,起页时间\n");
+        for (TSaltLinkPage p : rows) {
+            sb.append(csv(p.getBillNo())).append(',')
+                    .append(csv(p.getSiteNo())).append(',')
+                    .append(csv(p.getSiteName())).append(',')
+                    .append(csv(p.getSiteType())).append(',')
+                    .append(csv(nodeName(p.getNodeNo()))).append(',')
+                    .append(csv(p.getScopeRoad())).append(',')
+                    // 档案整数口径：三位品种数一律按整数出，不留小数位
+                    .append(p.getShouldCount() == null ? "" : p.getShouldCount()).append(',')
+                    .append(p.getDoneCount() == null ? "" : p.getDoneCount()).append(',')
+                    .append(p.getLackCount() == null ? "" : p.getLackCount()).append(',')
+                    .append(csv(statusName(p.getStatus()))).append(',')
+                    .append(csv(p.getCreateBy())).append(',')
+                    .append(p.getCreateTime() == null ? ""
+                            : new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(p.getCreateTime()))
+                    .append('\n');
+        }
+        out.write(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    private static String csv(String v) {
+        if (v == null) {
+            return "";
+        }
+        if (v.indexOf(',') >= 0 || v.indexOf('"') >= 0 || v.indexOf('\n') >= 0) {
+            return '"' + v.replace("\"", "\"\"") + '"';
+        }
+        return v;
+    }
+
+    private static String nodeName(Integer nodeNo) {
+        if (nodeNo == null) {
+            return "";
+        }
+        return nodeNo == 0 ? "省" : nodeNo == 1 ? "市" : "县";
+    }
+
+    private static String statusName(Integer status) {
+        if (status == null) {
+            return "待挂";
+        }
+        return status == 1 ? "已挂讫" : status == 2 ? "压页" : "待挂";
+    }
+
+    /** 企业总名录：停用（摘牌）/恢复。停用后该企业不开新页，旧页照旧在册 */
+    @ApiOperation(value = "企业总名录停用/恢复", notes = "0在册 1已摘牌")
+    @PostMapping("/entStatus")
+    @RequiresPermissions("salt:saltLinkPage:edit")
+    @Log(title = "食盐定点企业总名录", action = "changeStatus")
+    @ResponseBody
+    public AjaxResult changeEntStatus(@RequestParam("id") Long id,
+                                      @RequestParam("status") Integer status) {
+        try {
+            saltLinkPageService.changeEntStatus(id, status);
+        } catch (IllegalArgumentException e) {
+            return AjaxResult.error(e.getMessage());
+        }
+        return AjaxResult.success(status != null && status == 1 ? "已摘牌，该企业不再开新页" : "已恢复在册");
     }
 
     @ApiOperation(value = "企业总名录跳转", notes = "企业总名录跳转")
@@ -133,6 +238,7 @@ public class SaltLinkPageController extends BaseController {
     @ApiOperation(value = "起页", notes = "头一回起页，系统发挂接代号与签认码")
     @PostMapping("/add")
     @RequiresPermissions("salt:saltLinkPage:add")
+    @Log(title = "企业品种挂接簿页", action = "open")
     @ResponseBody
     public AjaxResult addSave(SaltLinkPageForm form) {
         TSaltLinkPage record;
@@ -155,6 +261,7 @@ public class SaltLinkPageController extends BaseController {
     @ApiOperation(value = "重挂保存", notes = "已挂数变动或换挂靠层后重算欠挂")
     @PostMapping("/edit")
     @RequiresPermissions("salt:saltLinkPage:edit")
+    @Log(title = "企业品种挂接簿页", action = "resave")
     @ResponseBody
     public AjaxResult editSave(SaltLinkPageForm form) {
         if (form == null || StringUtils.isEmpty(form.getId())) {
@@ -183,6 +290,7 @@ public class SaltLinkPageController extends BaseController {
     @ApiOperation(value = "推进一态", notes = "待挂→已挂讫→压页")
     @PostMapping("/advance")
     @RequiresPermissions("salt:saltLinkPage:edit")
+    @Log(title = "企业品种挂接簿页", action = "advance")
     @ResponseBody
     public AjaxResult advance(@RequestParam("id") Long id) {
         return toAjax(saltLinkPageService.advanceTSaltLinkPage(id));
@@ -191,6 +299,7 @@ public class SaltLinkPageController extends BaseController {
     @ApiOperation(value = "退回一态", notes = "退回上一态，旧页仍在册")
     @PostMapping("/revert")
     @RequiresPermissions("salt:saltLinkPage:edit")
+    @Log(title = "企业品种挂接簿页", action = "revert")
     @ResponseBody
     public AjaxResult revert(@RequestParam("id") Long id) {
         return toAjax(saltLinkPageService.revertTSaltLinkPage(id));
@@ -199,6 +308,7 @@ public class SaltLinkPageController extends BaseController {
     @ApiOperation(value = "删除", notes = "删页（沉底，不真抹）")
     @DeleteMapping("/remove")
     @RequiresPermissions("salt:saltLinkPage:remove")
+    @Log(title = "企业品种挂接簿页", action = "remove")
     @ResponseBody
     public AjaxResult remove(String ids) {
         return toAjax(saltLinkPageService.deleteTSaltLinkPageByIds(ids));
